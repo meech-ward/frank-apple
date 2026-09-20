@@ -106,6 +106,10 @@ struct mii_t;
 // Returns 0 on success, -1 on error
 int disk_mount_to_emulator(int drive, struct mii_t *mii, int slot, int preserve_state, bool read_only, bool bdsk_recreate);
 
+// Autoboot: remember the disk in drive 1 (index 0) and mount it again at power-up.
+void disk_autoboot_save(int drive);
+int disk_autoboot_mount(struct mii_t *mii, int slot);
+
 // Eject a disk from the emulator
 // drive: 0 or 1 (Drive 1 or Drive 2)
 // mii: pointer to the emulator instance

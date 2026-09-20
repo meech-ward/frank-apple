@@ -103,6 +103,9 @@ _mii_disk2_lss_tick(
 // debug, used for mish, only supports one card tho (yet)
 mii_card_disk2_t *_mish_d2 = NULL;
 
+// in disk_loader.c: write back a modified track (declared early for the motor-off flush)
+void disk_write_track(uint8_t drive, uint8_t track_id, mii_t* mii);
+
 /*
  * This timer is used to turn off the motor after a second
  */
@@ -116,6 +119,14 @@ _mii_floppy_motor_off_cb(
 //	printf("%s drive %d off\n", __func__, c->selected);
 	if (c->drive[c->selected].file && f->seed_dirty != f->seed_saved)
 		mii_floppy_update_tracks(f, c->drive[c->selected].file);
+	{	// loader-mounted media (no c->drive[].file): persist the resident track when the motor stops,
+		// otherwise the last written track only reaches the SD card on the next head move (Astra)
+		uint8_t t = f->track_id[f->qtrack];
+		if (t < MII_FLOPPY_TRACK_COUNT && f->tracks[t].dirty) {
+			printf("motor off: flushing track %u\n", (unsigned)t);
+			disk_write_track(c->selected, t, mii);
+		}
+	}
 	f->motor = 0;
 	mii_raise_signal(c->sig + SIG_MOTOR, 0);
 	return 0;

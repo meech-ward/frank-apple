@@ -31,6 +31,9 @@
 #include "mii_speaker.h"
 #include "mii_audio_i2s.h"
 #include "mii_slot.h"
+#if NETCARD_ENABLED
+#include "netcard.h"
+#endif
 #include "mii_disk2.h"
 #include "disk_loader.h"
 #include "mii_startscreen.h"
@@ -230,6 +233,89 @@ static uint32_t key_hold_frames = 0;  // Frames since key was first pressed
 #define KEY_REPEAT_INITIAL_DELAY 30   // ~500ms at 60fps before repeat starts
 #define KEY_REPEAT_RATE 4             // ~67ms between repeats
 
+// Serial console keyboard bridge (development aid): characters arriving on
+// stdio (USB CDC now, UART0 once the USB port becomes a keyboard host) are fed
+// to the emulated keyboard, one per frame so the single-byte latch is never
+// overrun. Ctrl-\ (0x1C) prints the 40-column text page as 24 lines so the
+// screen can be read back over the same link. Lowercase is folded to upper,
+// as a IIe with caps lock on.
+static void serial_dump_text_page(void) {
+    printf("---- text page ----\n");
+    for (int row = 0; row < 24; row++) {
+        uint16_t line_addr = 0x400 + (row & 7) * 0x80 + (row / 8) * 0x28;
+        char line[41];
+        for (int col = 0; col < 40; col++) {
+            uint8_t b = mii_read_one(&g_mii, line_addr + col);
+            uint8_t ch = b & 0x7F;
+            if (ch < 0x20) ch += 0x40;
+            line[col] = (char)ch;
+        }
+        line[40] = 0;
+        printf("|%s|\n", line);
+    }
+    printf("-------------------\n");
+}
+
+#define TYPING_SIZE 1024
+static uint8_t typing_buf[TYPING_SIZE];
+static uint32_t typing_head;
+static uint32_t typing_len;
+
+void typing_push(const uint8_t *s, size_t n) {
+    size_t i;
+    for (i = 0; i < n; i++) {
+        if (typing_len >= TYPING_SIZE)
+            return;                     // drop what does not fit
+        typing_buf[(typing_head + typing_len) % TYPING_SIZE] = s[i];
+        typing_len++;
+    }
+}
+
+// One shared mapping for serial and network typing: LF -> CR,
+// DEL -> backspace, lowercase folded to upper (caps lock on).
+static uint8_t typing_map(uint8_t c) {
+    if (c == '\n')
+        return 0x0D;                    // Enter
+    if (c == 0x7F)
+        return 0x08;                    // Backspace -> left arrow
+    if (c >= 'a' && c <= 'z')
+        return (uint8_t)(c - 0x20);     // caps lock on
+    return c;
+}
+
+// Drain one byte per frame into the emulated keyboard.
+static void typing_drain_one(void) {
+    uint8_t c;
+    if (typing_len == 0)
+        return;
+    c = typing_buf[typing_head];
+    typing_head = (typing_head + 1) % TYPING_SIZE;
+    typing_len--;
+    mii_keypress(&g_mii, typing_map(c));
+}
+
+static void process_serial_keyboard(void) {
+    int c = getchar_timeout_us(0);
+    uint8_t b;
+    if (c < 0)
+        return;
+    if (c == 0x1C) {
+        serial_dump_text_page();
+        return;
+    }
+    if (c == 0x1D) {  // Ctrl-]: toggle the disk menu from the console (headless F11)
+        do { __dmb(); } while (video_core_iteration_in_progress);
+        disk_ui_toggle();
+        return;
+    }
+    if (disk_ui_is_visible()) {  // console drives the menu: raw codes 0x0B up, 0x0A down, 0x0D enter, 0x1B esc, 1, 2
+        disk_ui_handle_key((uint8_t)c);
+        return;
+    }
+    b = (uint8_t)c;
+    typing_push(&b, 1);
+}
+
 static void process_keyboard(void) {
     int pressed;
     unsigned char key;
@@ -377,6 +463,7 @@ static __not_in_flash() void core1_main(void) {
         if (!disk_ui_is_visible()) {
             video_core_iteration();
         }
+        graphics_present();
 
         // Wait until the swap has actually happened (vsync tick), then rotate buffers.
         // This avoids writing into the buffer currently being scanned out.
@@ -551,11 +638,13 @@ int main() {
     // This gives the monitor time to lock onto the sync signal
     sleep_ms(500);
 
+#ifdef VIDEO_HDMI
     // Verify palette entry 15 was set
     MII_DEBUG_PRINTF("Palette initialized, verifying...\n");
     extern uint32_t conv_color[];
     uint64_t *conv_color64 = (uint64_t *)conv_color;
     MII_DEBUG_PRINTF("conv_color[15] = 0x%016llx 0x%016llx\n", conv_color64[30], conv_color64[31]);
+#endif
 
 #ifndef PICO_RP2040 // for RP2350 only
     // Display start screen after HDMI has stabilized
@@ -587,6 +676,7 @@ int main() {
 #endif
     
     // Initialize NES/SNES gamepad
+#ifndef NESPAD_DISABLED
     MII_DEBUG_PRINTF("Initializing NES gamepad...\n");
     if (nespad_begin(clock_get_hz(clk_sys) / 1000, NESPAD_GPIO_CLK, NESPAD_GPIO_DATA, NESPAD_GPIO_LATCH)) {
         MII_DEBUG_PRINTF("NES gamepad initialized (CLK=%d, DATA=%d, LATCH=%d)\n",
@@ -594,6 +684,9 @@ int main() {
     } else {
         MII_DEBUG_PRINTF("NES gamepad init failed\n");
     }
+#else
+    MII_DEBUG_PRINTF("NES gamepad disabled (pins used by SD)\n");
+#endif
     
     // Initialize USB HID keyboard/gamepad (if enabled)
 #ifdef USB_HID_ENABLED
@@ -610,6 +703,11 @@ int main() {
         MII_DEBUG_PRINTF("SD card not available (will run without disks)\n");
     }
     
+    // Virtual WiFi network card (needs SD driver's PIO claimed first)
+#if NETCARD_ENABLED
+    netcard_init();
+#endif
+
     // Initialize the Apple IIe emulator
     MII_DEBUG_PRINTF("Initializing Apple IIe emulator...\n");
     mii_init(&g_mii);
@@ -634,7 +732,7 @@ int main() {
         
         // Debug: dump first few bytes of slot 6 ROM
         mii_bank_t *card_rom = &g_mii.bank[MII_BANK_CARD_ROM];
-        MII_DEBUG_PRINTF("Card ROM bank: base=$%04X, mem=%p\n", card_rom->base, card_rom->mem);
+        MII_DEBUG_PRINTF("Card ROM bank: base=$%04X, mem=%p\n", card_rom->base, card_rom->ua.raw);
         MII_DEBUG_PRINTF("Slot 6 ROM at $C600: ");
         for (int i = 0; i < 16; i++) {
             MII_DEBUG_PRINTF("%02X ", mii_bank_peek(card_rom, 0xC600 + i));
@@ -652,6 +750,9 @@ int main() {
     }
     slot_res = mii_slot_drv_register(&g_mii, 5, "smartport");
     // TODO: log
+#if NETCARD_ENABLED
+    mii_slot_drv_register(&g_mii, 1, "netcard");
+#endif
     
     // Initialize disk UI with emulator pointer (slot 6 is standard for Disk II)
     disk_ui_init_with_emulator(&g_mii, 6);
@@ -665,7 +766,7 @@ int main() {
     uint8_t rst_lo = mii_bank_peek(rom_bank, 0xFFFC);
     uint8_t rst_hi = mii_bank_peek(rom_bank, 0xFFFD);
     MII_DEBUG_PRINTF("ROM Reset vector at $FFFC-$FFFD: $%02X%02X\n", rst_hi, rst_lo);
-    MII_DEBUG_PRINTF("ROM bank: base=$%04X, mem=%p\n", (unsigned)rom_bank->base, rom_bank->mem);
+    MII_DEBUG_PRINTF("ROM bank: base=$%04X, mem=%p\n", (unsigned)rom_bank->base, rom_bank->ua.raw);
     
     // Also check raw ROM data
     MII_DEBUG_PRINTF("Raw ROM bytes at offset 0x3FFC-0x3FFD: %02X %02X\n", 
@@ -678,7 +779,7 @@ int main() {
         MII_DEBUG_PRINTF("  Raw ROM offset 0x03FC: %02X %02X %02X %02X\n",
            mii_rom_iiee[0x03FC], mii_rom_iiee[0x03FD], mii_rom_iiee[0x03FE], mii_rom_iiee[0x03FF]);
         MII_DEBUG_PRINTF("  Bank peek $C3FC: %02X\n", mii_bank_peek(rom_bank, 0xC3FC));
-        MII_DEBUG_PRINTF("  Direct mem[0x03FC]: %02X\n", rom_bank->mem[0x03FC]);
+        MII_DEBUG_PRINTF("  Direct mem[0x03FC]: %02X\n", rom_bank->ua.raw[0x03FC]);
     
     // Load character ROM
     MII_DEBUG_PRINTF("Loading character ROM...\n");
@@ -724,6 +825,15 @@ int main() {
         .board_variant = board_num,
     };
     mii_startscreen_show(&screen_info);
+
+    // Boot the remembered disk like a real Disk II would (no-op when nothing is remembered).
+    // Same steps as the menu Boot action: mount, cold reset, slot ROMs visible at $Cn00.
+    if (disk_autoboot_mount(&g_mii, 6) == 0) {
+        MII_DEBUG_PRINTF("Autoboot: disk mounted in drive 1, booting it\n");
+        mii_reset(&g_mii, true);
+        uint8_t sw_byte = 0;
+        mii_mem_access(&g_mii, SWINTCXROMOFF, &sw_byte, true, true);
+    }
 
     // Let ROM boot naturally
     MII_DEBUG_PRINTF("Running ROM boot sequence (1M cycles)...\n");
@@ -821,12 +931,19 @@ int main() {
         }
         
         process_keyboard();
+        process_serial_keyboard();
+#if NETCARD_ENABLED
+        netcard_poll();
+#endif
+        typing_drain_one();
         
-        // Poll NES gamepad and update Apple II buttons
+        // Poll NES gamepad and merge with USB gamepad state
+#ifndef NESPAD_DISABLED
         nespad_read();
-        
-        // Merge USB gamepad state with NES gamepad state
         uint32_t combined_gamepad_state = nespad_state;
+#else
+        uint32_t combined_gamepad_state = 0;
+#endif
 #ifdef USB_HID_ENABLED
         combined_gamepad_state |= usbhid_wrapper_get_gamepad_state();
 #endif

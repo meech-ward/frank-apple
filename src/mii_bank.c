@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "board_config.h"
 #include <pico.h>
 #include <pico/stdlib.h>
 #include <stdio.h>
@@ -204,7 +205,7 @@ mii_bank_install_access_cb(
 // To save vpage
 inline static
 void flush_vram_block(vram_t* __restrict vram, vram_page_t* desc, const uint8_t vpage) {
-    gpio_put(PICO_DEFAULT_LED_PIN, true);
+    FRANK_LED_PUT(true);
     const uint32_t file_off = ((uint32_t)vpage) * RAM_PAGE_SIZE;
     const uint32_t ram_off  = ((uint32_t)desc->lba) * RAM_PAGE_SIZE;
 	f_lseek(&vram->f, file_off);
@@ -215,13 +216,13 @@ void flush_vram_block(vram_t* __restrict vram, vram_page_t* desc, const uint8_t 
             &wb);
 	// mark page as not more stored
 	desc->in_ram = 0;
-    gpio_put(PICO_DEFAULT_LED_PIN, false);
+    FRANK_LED_PUT(false);
 }
 
 // To load vpage
 inline static
 void read_vram_block(vram_t* __restrict vram, const uint8_t vpage, const uint8_t lba_page) {
-    gpio_put(PICO_DEFAULT_LED_PIN, true);
+    FRANK_LED_PUT(true);
 	register vram_page_t* desc = &vram->v_desc[vpage]; // target
     const uint32_t file_off = ((uint32_t)vpage) * RAM_PAGE_SIZE;
     const uint32_t ram_off  = ((uint32_t)lba_page) * RAM_PAGE_SIZE;
@@ -235,7 +236,7 @@ void read_vram_block(vram_t* __restrict vram, const uint8_t vpage, const uint8_t
 	desc->lba = lba_page;
 	desc->in_ram = 1;
 	vram->s_desc[lba_page].dirty = 0; // just read, not yet changed
-    gpio_put(PICO_DEFAULT_LED_PIN, false);
+    FRANK_LED_PUT(false);
 }
 
 #if defined(PICO_RP2040) && (defined(RAM_PAGES_PER_POOL) && defined(MAX_PAGES_PER_POOL) && (RAM_PAGES_PER_POOL != MAX_PAGES_PER_POOL))

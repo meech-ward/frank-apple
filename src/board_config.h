@@ -33,7 +33,7 @@
  */
 
 // Default to M1 if no config specified
-#if !defined(BOARD_M1) && !defined(BOARD_M2)
+#if !defined(BOARD_M1) && !defined(BOARD_M2) && !defined(BOARD_P2W)
 #define BOARD_M1
 #endif
 
@@ -180,6 +180,67 @@ static inline uint get_psram_pin(void) {
 #endif // BOARD_M2
 
 //=============================================================================
+// P2W Layout Configuration (Pico 2 W + Pimoroni Display Pack 2.8)
+//=============================================================================
+// ST7789 320x240 on hardware SPI0; SD card on PIO-SPI (pio1, sm 0) since
+// hardware SPI0 belongs to the display. Pico 2 W radio uses GP23/24/25/29
+// internally, so those are never assigned here. No PSRAM in this variant.
+#ifdef BOARD_P2W
+
+// ST7789 Display Pins (hardware SPI0)
+#define LCD_PIN_DC   16
+#define LCD_PIN_CS   17
+#define LCD_PIN_SCK  18
+#define LCD_PIN_MOSI 19
+#define LCD_PIN_BL   20
+#define LCD_SPI      spi0
+
+// Display Pack 2.8 buttons
+#define BTN_A_PIN 12
+#define BTN_B_PIN 13
+#define BTN_X_PIN 14
+#define BTN_Y_PIN 15
+
+// SD Card Pins (PIO-SPI, see drivers/sdcard/spi.pio)
+// SM 1: the NES pad driver claims the first free machine on pio1 (SM 0) before the SD init.
+// SD card on the Display Pack 2.8 SP/CE plug: pin 3=GP8 MISO, 4=GP11 MOSI, 5=GP10 SCK, 6=GP9 CS,
+// pin 1 GND, 7 3V3, 8 VSYS (5 V), pin 2=GP7 is the UPS-B I2C SCL: leave it unconnected.
+// Fallback if wiring to the header instead: CLK 2, CMD 3, D0 4, D3 5 (GP4/5 double as Qw/ST).
+#define SDCARD_PIN_CLK 10
+#define SDCARD_PIN_CMD 11
+#define SDCARD_PIN_D0  8
+#define SDCARD_PIN_D3  9
+// NES pad pins 9/10/11 are the SP/CE SPI lines; no pad on this board, keep the driver off them.
+#define NESPAD_DISABLED 1
+#define SDCARD_PIO    pio1
+#define SDCARD_PIO_SM 1
+
+// PS/2 Keyboard Pins (off in our build; UART0 debug shares them)
+#define PS2_PIN_CLK  0
+#define PS2_PIN_DATA 1
+
+// NES/SNES Gamepad Pins
+#define NESPAD_GPIO_CLK   9
+#define NESPAD_GPIO_DATA  10
+#define NESPAD_GPIO_LATCH 11
+
+// I2S Audio Pins (unused)
+// I2S (MAX98357A): DIN GP22, BCLK GP2, LRCLK GP3 (clock pins must be adjacent). Build with -DAUDIO_TYPE=I2S.
+#define I2S_DATA_PIN       22
+#define I2S_CLOCK_PIN_BASE 2
+
+// PWM Audio Pins
+// GP21 is wired to the LCD TE output on Display Pack 2.8 (via 330R): never drive it.
+// GP22 is the only header pin with nothing attached (Display Pack + UPS-B).
+#define PWM_RIGHT_PIN 22
+#define PWM_LEFT_PIN  22
+#define BEEPER_PIN 22
+
+// No PSRAM / PSRAM_* defines in this variant.
+
+#endif // BOARD_P2W
+
+//=============================================================================
 // Apple IIe Display Configuration
 //=============================================================================
 
@@ -199,3 +260,16 @@ static inline uint get_psram_pin(void) {
 #define APPLE2_FB_HEIGHT 384  // 192 * 2 for scanline doubling
 
 #endif // BOARD_CONFIG_H
+
+//=============================================================================
+// Disk-activity LED: Pico W / Pico 2 W route the LED through the CYW43, so
+// PICO_DEFAULT_LED_PIN is undefined there. Make the LED a no-op in that case.
+//=============================================================================
+#include "hardware/gpio.h"
+#ifdef PICO_DEFAULT_LED_PIN
+#define FRANK_LED_PUT(v) gpio_put(PICO_DEFAULT_LED_PIN, (v))
+#define FRANK_LED_INIT() do { gpio_init(PICO_DEFAULT_LED_PIN); gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT); } while (0)
+#else
+#define FRANK_LED_PUT(v) ((void)0)
+#define FRANK_LED_INIT() ((void)0)
+#endif

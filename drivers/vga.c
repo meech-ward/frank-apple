@@ -424,3 +424,7 @@ void startVIDEO(uint8_t vol) {
 }
 
 bool hdmi_check_and_restart(void) { }
+
+void graphics_present(void) {
+    // No-op: VGA scans the framebuffer out continuously.
+}

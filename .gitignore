@@ -16,3 +16,5 @@ third_party/
 # macOS
 .DS_Store
 bin/
+build-*/
+generated/

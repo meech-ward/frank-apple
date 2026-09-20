@@ -36,7 +36,11 @@ disk_entry_t* g_disk_list = (disk_entry_t*)vram;//[MAX_DISK_IMAGES];
 #if PSRAM_MAX_FREQ_MHZ
 uint8_t *drive0_cache = PSRAM_DATA;
 #else
-uint8_t drive0_cache[BDSK_BYTES];
+// No-PSRAM build: no whole-disk cache. Drive 0 streams one track at a
+// time from its .bdsk through s_bdsk_fp0, kept open while mounted.
+static FIL s_bdsk_fp0;
+static bool s_bdsk_fp0_open = false;
+static char s_bdsk_fp0_path[256];
 #endif
 #endif
 
@@ -98,6 +102,7 @@ static bool disk_open_bdsk_image_file(FIL *out_fp, const char *filename, char *o
     
     FRESULT fr = f_open(out_fp, path, FA_READ | FA_WRITE | FA_OPEN_ALWAYS);
     if (fr != FR_OK) {
+        printf("%s: f_open(%s) failed: %d\n", __func__, path, fr);
         return false;
     }
     if (out_path && out_path_len) {
@@ -106,6 +111,101 @@ static bool disk_open_bdsk_image_file(FIL *out_fp, const char *filename, char *o
     }
     return true;
 }
+
+#if PICO_RP2350 && !PSRAM_MAX_FREQ_MHZ
+static uint32_t disk_bdsk_track_offset(uint8_t track_id) {
+    return (uint32_t)(sizeof(bdsk_header_t) +
+        track_id * (sizeof(bdsk_track_desc_t) + BDSK_TRACK_DATA_SIZE));
+}
+
+// Ensure the drive-0 stream handle is open on the .bdsk belonging to
+// `filename` (an original image name; the .bdsk mapping matches
+// disk_open_bdsk_image_file). Closes and reopens when a different image
+// is mounted. Returns true when the handle is ready for f_lseek/f_read.
+static bool disk_bdsk_stream_ensure_open(const char *filename) {
+    if (!sd_mounted || !filename)
+        return false;
+
+    const char *dot = strrchr(filename, '.');
+    bool is_bdsk = (dot && strcasecmp(dot, ".bdsk") == 0);
+
+    char bpath[sizeof(s_bdsk_fp0_path)];
+    if (is_bdsk) {
+        snprintf(bpath, sizeof(bpath), "%s/%s", selected_dir, filename);
+    } else {
+        snprintf(bpath, sizeof(bpath), "%s/%s.bdsk", selected_dir, filename);
+    }
+
+    if (s_bdsk_fp0_open) {
+        if (strcmp(s_bdsk_fp0_path, bpath) == 0)
+            return true;
+        f_close(&s_bdsk_fp0);
+        s_bdsk_fp0_open = false;
+    }
+
+    FRESULT fr = f_open(&s_bdsk_fp0, bpath, FA_READ | FA_WRITE);
+    if (fr != FR_OK) {
+        printf("%s: f_open(%s) failed: %d\n", __func__, bpath, fr);
+        return false;
+    }
+    strncpy(s_bdsk_fp0_path, bpath, sizeof(s_bdsk_fp0_path) - 1);
+    s_bdsk_fp0_path[sizeof(s_bdsk_fp0_path) - 1] = '\0';
+    s_bdsk_fp0_open = true;
+    return true;
+}
+
+static void disk_bdsk_stream_close(void) {
+    if (s_bdsk_fp0_open) {
+        f_close(&s_bdsk_fp0);
+        s_bdsk_fp0_open = false;
+    }
+}
+
+// Read one track (descriptor + 6656 bytes) through the stream handle
+// straight into the floppy's current-track storage. Returns 0 on success.
+static int disk_bdsk_stream_read_track(mii_floppy_t *floppy, uint8_t track_id) {
+    if (!s_bdsk_fp0_open) {
+        printf("%s: stream not open\n", __func__);
+        return -1;
+    }
+    if (track_id >= BDSK_TRACKS) {
+        printf("%s: track_id %u out of range\n", __func__, (unsigned)track_id);
+        return -1;
+    }
+
+    FRESULT fr = f_lseek(&s_bdsk_fp0, disk_bdsk_track_offset(track_id));
+    if (fr != FR_OK) {
+        printf("%s: f_lseek track %u failed: %d\n", __func__, (unsigned)track_id, fr);
+        return -1;
+    }
+
+    bdsk_track_desc_t desc;
+    UINT br = 0;
+    fr = f_read(&s_bdsk_fp0, &desc, sizeof(desc), &br);
+    if (fr != FR_OK || br != sizeof(desc)) {
+        printf("%s: desc read track %u failed fr=%d br=%u\n", __func__, (unsigned)track_id, fr, br);
+        return -1;
+    }
+
+    br = 0;
+    fr = f_read(&s_bdsk_fp0, floppy->curr_track_data, BDSK_TRACK_DATA_SIZE, &br);
+    if (fr != FR_OK || br != BDSK_TRACK_DATA_SIZE) {
+        printf("%s: data read track %u failed fr=%d br=%u\n", __func__, (unsigned)track_id, fr, br);
+        return -1;
+    }
+
+    if (desc.bit_count == 0 || desc.bit_count > BDSK_MAX_BITS) {
+        printf("%s: track %u bad bit_count %lu\n", __func__, (unsigned)track_id, (unsigned long)desc.bit_count);
+        return -1;
+    }
+
+    mii_floppy_track_t *dst = &floppy->tracks[track_id];
+    dst->bit_count = desc.bit_count;
+    dst->virgin = 0;
+    dst->dirty = 0;
+    return 0;
+}
+#endif
 
 //  DOS 3.3 Physical sector order (index is physical sector, value is DOS sector)
 static const uint8_t DO_SECMAP[16] = {
@@ -141,8 +241,10 @@ disk_dump_current_track(
 
     mii_floppy_track_t *src = &floppy->tracks[track_id];
 
-    if (src->bit_count == 0 || src->bit_count > BDSK_MAX_BITS)
+    if (src->bit_count == 0 || src->bit_count > BDSK_MAX_BITS) {
+        printf("%s: track %d bad bit_count %lu\n", __func__, track_id, (unsigned long)src->bit_count);
         return -1;
+    }
 
     /* --- write header once (track 0 is enough) --- */
     if (track_id == 0) {
@@ -157,8 +259,10 @@ disk_dump_current_track(
 
         UINT bw;
         fr = f_write(target, &hdr, sizeof(hdr), &bw);
-        if (fr != FR_OK || bw != sizeof(hdr))
+        if (fr != FR_OK || bw != sizeof(hdr)) {
+            printf("%s: header write failed fr=%d bw=%u\n", __func__, fr, bw);
             return -1;
+        }
     }
 
     /* --- compute track offset --- */
@@ -176,8 +280,10 @@ disk_dump_current_track(
 
     UINT bw = 0;
     fr = f_write(target, &desc, sizeof(desc), &bw);
-    if (fr != FR_OK || bw != sizeof(desc))
+    if (fr != FR_OK || bw != sizeof(desc)) {
+        printf("%s: track %d desc write failed fr=%d bw=%u\n", __func__, track_id, fr, bw);
         return -1;
+    }
 
     /* --- write track data --- */
     fr = f_write(
@@ -186,10 +292,12 @@ disk_dump_current_track(
         BDSK_TRACK_DATA_SIZE,
         &bw
     );
-    if (fr != FR_OK || bw != BDSK_TRACK_DATA_SIZE)
+    if (fr != FR_OK || bw != BDSK_TRACK_DATA_SIZE) {
+        printf("%s: track %d data write failed fr=%d bw=%u\n", __func__, track_id, fr, bw);
         return -1;
+    }
 
-#if PICO_RP2350
+#if PICO_RP2350 && PSRAM_MAX_FREQ_MHZ
     if (!drive) { // drive #0
         memcpy(drive0_cache + track_offset, &desc, sizeof(desc));
         memcpy(drive0_cache + track_offset + sizeof(desc), floppy->curr_track_data, BDSK_TRACK_DATA_SIZE);
@@ -447,9 +555,11 @@ disk_load_floppy_bdsk_track_from_fatfs(
     FIL            *fp,
     uint8_t         track_id
 ) {
-    if (track_id >= DSK_TRACKS)
+    if (track_id >= DSK_TRACKS) {
+        printf("%s: track_id %u out of range\n", __func__, (unsigned)track_id);
         return -1;
-    
+    }
+
     /* --- compute track offset --- */
     uint32_t track_offset =
         sizeof(bdsk_header_t) +
@@ -457,16 +567,23 @@ disk_load_floppy_bdsk_track_from_fatfs(
 
     /* --- read descriptor --- */
     bdsk_track_desc_t desc;
-#if PICO_RP2350
+#if PICO_RP2350 && PSRAM_MAX_FREQ_MHZ
     if (!drive) { // drive #0
         memcpy(&desc, drive0_cache + track_offset, sizeof(bdsk_track_desc_t));
         memcpy(floppy->curr_track_data, drive0_cache + track_offset + sizeof(bdsk_track_desc_t), BDSK_TRACK_DATA_SIZE);
         goto ok;
     }
+#endif
+#if PICO_RP2350
     if (butter_psram_size()) { // drive #1
         memcpy(&desc, PSRAM_DATA + BDSK_BYTES + track_offset, sizeof(bdsk_track_desc_t));
         memcpy(floppy->curr_track_data, PSRAM_DATA + BDSK_BYTES + track_offset + sizeof(bdsk_track_desc_t), BDSK_TRACK_DATA_SIZE);
         goto ok;
+    }
+#endif
+#if PICO_RP2350 && !PSRAM_MAX_FREQ_MHZ
+    if (!drive) { // drive #0 streams from SD through the persistent handle
+        return disk_bdsk_stream_read_track(floppy, track_id);
     }
 #endif
     FRESULT fr = f_lseek(fp, track_offset);
@@ -503,12 +620,17 @@ static int disk_load_floppy_bdsk_from_fatfs(int drive, mii_floppy_t *floppy, mii
     /* --- read and validate header --- */
     bdsk_header_t hdr;
 
-    FRESULT fr = f_lseek(fp, 0);
-    if (fr != FR_OK)
-        return -1;
+    FRESULT fr = FR_OK;
+    if (fp) {  // NULL on the no-PSRAM drive-0 path: the header comes through the persistent stream handle
+        fr = f_lseek(fp, 0);
+        if (fr != FR_OK) {
+            printf("%s: f_lseek(0) failed: %d\n", __func__, fr);
+            return -1;
+        }
+    }
 
     UINT br;
-#if PICO_RP2350
+#if PICO_RP2350 && PSRAM_MAX_FREQ_MHZ
     if (!drive) { // drive #0
         fr = f_read(fp, drive0_cache, BDSK_BYTES, &br);
         if (fr != FR_OK || br != BDSK_BYTES)
@@ -516,6 +638,25 @@ static int disk_load_floppy_bdsk_from_fatfs(int drive, mii_floppy_t *floppy, mii
         memcpy(&hdr, drive0_cache, sizeof hdr);
         goto ok;
     }
+#endif
+#if PICO_RP2350 && !PSRAM_MAX_FREQ_MHZ
+    if (!drive) { // drive #0: header comes through the persistent handle
+        if (!disk_bdsk_stream_ensure_open(file->pathname))
+            return -1;
+        fr = f_lseek(&s_bdsk_fp0, 0);
+        if (fr != FR_OK) {
+            printf("%s: stream f_lseek(0) failed: %d\n", __func__, fr);
+            return -1;
+        }
+        fr = f_read(&s_bdsk_fp0, &hdr, sizeof(hdr), &br);
+        if (fr != FR_OK || br != sizeof(hdr)) {
+            printf("%s: stream header read failed fr=%d br=%u (file size %lu)\n", __func__, fr, br, (unsigned long)f_size(&s_bdsk_fp0));
+            return -1;
+        }
+        goto ok;
+    }
+#endif
+#if PICO_RP2350
     if (butter_psram_size()) { // drive #1
         fr = f_read(fp, PSRAM_DATA + BDSK_BYTES, BDSK_BYTES, &br);
         if (fr != FR_OK || br != BDSK_BYTES)
@@ -529,15 +670,20 @@ static int disk_load_floppy_bdsk_from_fatfs(int drive, mii_floppy_t *floppy, mii
     if (fr != FR_OK || br != sizeof(hdr))
         return -1;
 ok:
-    if (memcmp(hdr.magic, BDSK_MAGIC, 4) != 0)
+    if (memcmp(hdr.magic, BDSK_MAGIC, 4) != 0) {
+        printf("%s: bad magic %02x%02x%02x%02x\n", __func__, hdr.magic[0], hdr.magic[1], hdr.magic[2], hdr.magic[3]);
         return -1;
+    }
 
-    if (hdr.version != BDSK_VERSION || hdr.tracks != BDSK_TRACKS)
+    if (hdr.version != BDSK_VERSION || hdr.tracks != BDSK_TRACKS) {
+        printf("%s: bad header version=%u tracks=%u\n", __func__, (unsigned)hdr.version, (unsigned)hdr.tracks);
         return -1;
+    }
 
     // all tracks validation loading
     for (int track = 0; track < hdr.tracks; track++) {
         if (disk_load_floppy_bdsk_track_from_fatfs(drive, floppy, file, fp, track) < 0) {
+            printf("%s: track %d load failed\n", __func__, track);
             return -1;
         }
     }
@@ -754,13 +900,18 @@ int disk_load_image(int drive, int index, bool write) {
 // Unload a disk image
 void disk_unload_image(int drive) {
     if (drive < 0 || drive > 1) return;
-    
+
     loaded_disk_t *disk = &g_loaded_disks[drive];
-    
+
     if (!disk->loaded) return;
 
+#if PICO_RP2350 && !PSRAM_MAX_FREQ_MHZ
+    if (!drive)
+        disk_bdsk_stream_close();
+#endif
+
     memset(disk, 0, sizeof(*disk));
-    
+
     printf("Unloaded drive %d\n", drive + 1);
 }
 
@@ -827,7 +978,8 @@ int disk_mount_to_emulator(int drive, mii_t *mii, int slot, int preserve_state, 
     memset(file, 0, sizeof(*file));
     strncpy(file->pathname, disk->filename, sizeof(file->pathname));  // Just point to our filename
     file->format = disk_type_to_mii_format(disk->type, disk->filename);
-    file->read_only = read_only;  // Read-only: no in-memory backing for writes
+    file->read_only = read_only;
+    disk->write_back = !read_only;  // the loader flag must agree with the mount policy (Astra)
     file->size = disk->size;
     
     printf("Mounting %s to drive %d (format=%d, size=%lu, preserve=%d)\n",
@@ -841,6 +993,11 @@ int disk_mount_to_emulator(int drive, mii_t *mii, int slot, int preserve_state, 
     
     // Initialize the floppy (clears all tracks)
     mii_floppy_init(floppy);
+    // Expose the mount policy to the guest write-protect sense so DOS reports WRITE PROTECTED (Astra)
+    if (file->read_only)
+        floppy->write_protected |= MII_FLOPPY_WP_RO_FILE;
+    else
+        floppy->write_protected &= ~MII_FLOPPY_WP_RO_FILE;
     
     // Restore drive state if preserving (INSERT mode)
     if (preserve_state) {
@@ -856,6 +1013,57 @@ int disk_mount_to_emulator(int drive, mii_t *mii, int slot, int preserve_state, 
 
     // Load the disk image into the floppy structure
     res = -1;
+#if PICO_RP2350 && !PSRAM_MAX_FREQ_MHZ
+    if (!drive) {
+        // No-PSRAM drive 0: no whole-disk cache. Convert the original
+        // image to .bdsk (if needed) with transient handles, then stream
+        // every track through the persistent handle, which stays open
+        // while the disk is mounted. The handle is closed first so the
+        // conversion target never shares its file with another open
+        // handle (FatFS rejects the second write-mode open with FR_LOCKED).
+        disk_bdsk_stream_close();
+        if (file->format == MII_DD_FILE_BDSK) {
+            res = 0; // .bdsk needs no conversion; stream it below
+        } else if (bdsk_recreate || !disk_bdsk_exists(file->pathname)) {
+            // Open the image on SD
+            if (!disk_open_original_image_file(disk->filename, &fp, path, sizeof(path))) {
+                printf("Failed to open disk image %s\n", disk->filename);
+                return -1;
+            }
+            switch (file->format) {
+                case MII_DD_FILE_DSK:
+                case MII_DD_FILE_DO:
+                case MII_DD_FILE_PO:
+                    res = disk_load_floppy_dsk_from_fatfs(drive,floppy, file, &fp);
+                    break;
+                case MII_DD_FILE_NIB:
+                    res = disk_load_floppy_nib_from_fatfs(drive, floppy, file, &fp);
+                    break;
+                case MII_DD_FILE_WOZ:
+                    res = disk_load_floppy_woz_from_fatfs(drive, floppy, file, &fp);
+                    break;
+                default:
+                    printf("%s: unsupported format %d\n", __func__, file->format);
+                    res = -1;
+                    break;
+            }
+            f_close(&fp);
+        } else {
+            res = 0; // .bdsk is already on SD; stream it below
+        }
+        if (res >= 0) {
+            res = disk_load_floppy_bdsk_from_fatfs(drive, floppy, file, NULL);
+        }
+        if (res >= 0) {
+            res = disk_load_floppy_bdsk_track_from_fatfs(drive, floppy, file, NULL, track_id);
+        }
+        if (res < 0) {
+            disk_bdsk_stream_close();
+            printf("Failed to load disk image to floppy: %d\n", res);
+            return -1;
+        }
+    } else
+#endif
     if (bdsk_recreate || !disk_bdsk_exists(file->pathname)) {
         // Open the image on SD
         if (!disk_open_original_image_file(disk->filename, &fp, path, sizeof(path))) {
@@ -882,13 +1090,15 @@ int disk_mount_to_emulator(int drive, mii_t *mii, int slot, int preserve_state, 
                 res = -1;
                 break;
         }
+        f_close(&fp);
     } else {
         // bdsk есть → НЕ КОНВЕРТИРУЕМ
         if (!disk_open_bdsk_image_file(&fp, file->pathname, path, sizeof(path)))
             return -1;
         res = disk_load_floppy_bdsk_from_fatfs(drive, floppy, file, &fp);
+        f_close(&fp);
     }
-    f_close(&fp);
+#if !(PICO_RP2350 && !PSRAM_MAX_FREQ_MHZ)
     if (res >= 0) {
         if (!disk_open_bdsk_image_file(&fp, file->pathname, path, sizeof(path))) {
             return -1;
@@ -896,6 +1106,7 @@ int disk_mount_to_emulator(int drive, mii_t *mii, int slot, int preserve_state, 
         res = disk_load_floppy_bdsk_track_from_fatfs(drive, floppy, file, &fp, track_id);
         f_close(&fp);
     }
+#endif
 
     if (res < 0) {
         printf("Failed to load disk image to floppy: %d\n", res);
@@ -929,14 +1140,26 @@ void disk_reload_track(uint8_t drive, uint8_t track_id, mii_t* mii) {
         printf("Failed to get floppy structure for drive %d (slot %d)\n", drive + 1, g_disk2_slot);
         return;
     }
-    if (!disk_open_bdsk_image_file(&fp, disk->filename, path, sizeof(path))) {
-        printf("Failed to open disk image %s\n", disk->filename);
-        return;
-    }
     mii_floppy_t *floppy = floppies[drive];
     mii_dd_file_t *file = &g_dd_files[drive];
-    res = disk_load_floppy_bdsk_track_from_fatfs(drive, floppy, file, &fp, track_id);
-    f_close(&fp);
+#if PICO_RP2350 && !PSRAM_MAX_FREQ_MHZ
+    if (!drive) {
+        // Drive 0 streams through the persistent handle (stays open).
+        if (!disk_bdsk_stream_ensure_open(disk->filename)) {
+            printf("Failed to open disk image %s\n", disk->filename);
+            return;
+        }
+        res = disk_load_floppy_bdsk_track_from_fatfs(drive, floppy, file, NULL, track_id);
+    } else
+#endif
+    {
+        if (!disk_open_bdsk_image_file(&fp, disk->filename, path, sizeof(path))) {
+            printf("Failed to open disk image %s\n", disk->filename);
+            return;
+        }
+        res = disk_load_floppy_bdsk_track_from_fatfs(drive, floppy, file, &fp, track_id);
+        f_close(&fp);
+    }
 
     if (res < 0) {
         printf("Failed to load disk image track %d to floppy: %d\n", track_id, res);
@@ -1007,14 +1230,28 @@ void disk_write_track(uint8_t drive, uint8_t track_id, mii_t* mii) {
         printf("Failed to get floppy structure for drive %d (slot %d)\n", drive + 1, g_disk2_slot);
         return;
     }
-    if (!disk_open_bdsk_image_file(&fp, disk->filename, path, sizeof(path))) {
-        printf("Failed to open disk image %s\n", disk->filename);
-        return;
-    }
     mii_floppy_t *floppy = floppies[drive];
     mii_dd_file_t *file = &g_dd_files[drive];
-    res = disk_write_floppy_bdsk_track_to_fatfs(drive, floppy, file, &fp, track_id);
-    f_close(&fp);
+#if PICO_RP2350 && !PSRAM_MAX_FREQ_MHZ
+    if (!drive) {
+        // Write-back reuses the same FIL as the read stream, so the
+        // handle never goes stale; f_sync inside the writer makes it
+        // durable. No close/reopen cycle is needed.
+        if (!disk_bdsk_stream_ensure_open(disk->filename)) {
+            printf("Failed to open disk image %s\n", disk->filename);
+            return;
+        }
+        res = disk_write_floppy_bdsk_track_to_fatfs(drive, floppy, file, &s_bdsk_fp0, track_id);
+    } else
+#endif
+    {
+        if (!disk_open_bdsk_image_file(&fp, disk->filename, path, sizeof(path))) {
+            printf("Failed to open disk image %s\n", disk->filename);
+            return;
+        }
+        res = disk_write_floppy_bdsk_track_to_fatfs(drive, floppy, file, &fp, track_id);
+        f_close(&fp);
+    }
 
     if (res < 0) {
         printf("Failed to write disk image track %d to floppy: %d\n", track_id, res);
@@ -1044,9 +1281,78 @@ void disk_eject_from_emulator(int drive, mii_t *mii, int slot) {
     
     // Re-initialize the floppy (clears all data, makes it "empty")
     mii_floppy_init(floppies[drive]);
-    
+
     // Clear the static file structure
     memset(&g_dd_files[drive], 0, sizeof(g_dd_files[drive]));
-    
+
+#if PICO_RP2350 && !PSRAM_MAX_FREQ_MHZ
+    if (!drive)
+        disk_bdsk_stream_close();
+#endif
+
     printf("Drive %d ejected\n", drive + 1);
+}
+
+#if !PSRAM_MAX_FREQ_MHZ
+// No-PSRAM build: psram_allocator.c is not compiled, so provide the size query
+// the disk loader uses to gate drive #1 / HDD paths. Zero = "no PSRAM present".
+unsigned int butter_psram_size(void) { return 0; }
+#endif
+
+// ---------------------------------------------------------------------------
+// Autoboot: remember the disk in drive 1 so the next power-up boots it, the way
+// a real Disk II boots whatever is in the drive. Stored on the card as two lines
+// (directory, filename). Delete the file, or mount another disk, to change it.
+// ---------------------------------------------------------------------------
+#define AUTOBOOT_FILE "/apple/autoboot.txt"
+
+void disk_autoboot_save(int drive) {
+    if (drive != 0 || !sd_mounted) return;
+    loaded_disk_t *disk = &g_loaded_disks[0];
+    if (!disk->loaded || !disk->filename[0]) return;
+    FIL f;
+    if (f_open(&f, AUTOBOOT_FILE, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK) {
+        printf("autoboot: cannot write %s\n", AUTOBOOT_FILE);
+        return;
+    }
+    UINT bw;
+    f_write(&f, selected_dir, strlen(selected_dir), &bw);
+    f_write(&f, "\n", 1, &bw);
+    f_write(&f, disk->filename, strlen(disk->filename), &bw);
+    f_write(&f, "\n", 1, &bw);
+    f_close(&f);
+    printf("autoboot: will boot %s/%s next power-up\n", selected_dir, disk->filename);
+}
+
+int disk_autoboot_mount(mii_t *mii, int slot) {
+    if (!sd_mounted) return -1;
+    FIL f;
+    char buf[256];
+    UINT br = 0;
+    if (f_open(&f, AUTOBOOT_FILE, FA_READ) != FR_OK) return -1;   // nothing remembered: boot to BASIC
+    f_read(&f, buf, sizeof(buf) - 1, &br);
+    f_close(&f);
+    buf[br] = '\0';
+    char *nl = strchr(buf, '\n');
+    if (!nl) return -1;
+    *nl = '\0';
+    char *name = nl + 1;
+    char *end = strpbrk(name, "\r\n");
+    if (end) *end = '\0';
+    end = strchr(buf, '\r');
+    if (end) *end = '\0';
+    if (!buf[0] || !name[0]) return -1;
+    strncpy(selected_dir, buf, sizeof(selected_dir) - 1);
+    selected_dir[sizeof(selected_dir) - 1] = '\0';
+    int n = disk_scan_directory(selected_dir);
+    if (n < 0) { n = -n; strcpy(selected_dir, "/"); }
+    for (int i = 0; i < n; i++) {
+        if (g_disk_list[i].type != DIR_TYPE && strcmp(g_disk_list[i].filename, name) == 0) {
+            if (disk_load_image(0, i, true) != 0) return -1;
+            printf("autoboot: mounting %s from %s\n", name, selected_dir);
+            return disk_mount_to_emulator(0, mii, slot, 0, false, false);
+        }
+    }
+    printf("autoboot: %s not found in %s\n", name, selected_dir);
+    return -1;
 }

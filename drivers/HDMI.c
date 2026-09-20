@@ -810,3 +810,7 @@ void graphics_rebind_irq_to_current_core(void) {
 void set_palette(uint8_t n) {
     // Stub
 }
+
+void graphics_present(void) {
+    // No-op: HDMI scans the framebuffer out continuously.
+}

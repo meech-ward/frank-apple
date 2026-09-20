@@ -80,6 +80,8 @@ void graphics_set_palette(uint8_t i, uint32_t color888);
 void graphics_restore_sync_colors(void);
 void startVIDEO(uint8_t vol);
 void set_palette(uint8_t n); // переключение палитр
+// Push the framebuffer to the panel (SPI LCD); no-op for scanout video.
+void graphics_present(void);
 
 struct video_mode_t graphics_get_video_mode(int mode);
 void graphics_set_bgcolor(uint32_t color888);

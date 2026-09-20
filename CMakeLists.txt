@@ -21,18 +21,20 @@ set(BUILD_VERSION "RC24")
 # Set board to Pico 2 (RP2350)
 set(PICO_BOARD pico2 CACHE STRING "Board type")
 
-# Board configuration variant (M1, M2)
-set(BOARD_VARIANT "M1" CACHE STRING "Board variant: M1 or M2")
+# Board configuration variant (M1, M2, P2W)
+set(BOARD_VARIANT "M1" CACHE STRING "Board variant: M1, M2 or P2W")
 
 # CPU overclock configuration (252, 378, 504 MHz)
 set(CPU_SPEED "378" CACHE STRING "CPU clock in MHz: 252, 378, 504")
 
-set(VIDEO_TYPE "VGA" CACHE STRING "Video output: HDMI or VGA")
+set(VIDEO_TYPE "VGA" CACHE STRING "Video output: HDMI, VGA or SPI")
 
 if(VIDEO_TYPE STREQUAL "HDMI")
     set(VIDEO_HDMI ON)
 elseif(VIDEO_TYPE STREQUAL "VGA")
     set(VIDEO_VGA ON)
+elseif(VIDEO_TYPE STREQUAL "SPI")
+    set(VIDEO_SPI ON)
 endif()
 
 # Audio output configuration (I2S, PWM or PWME)
@@ -57,6 +59,9 @@ endif()
 if(BOARD_VARIANT STREQUAL "M1")
     set(I2S_DATA_PIN "26")
     set(I2S_CLOCK_PIN_BASE "27")
+elseif(BOARD_VARIANT STREQUAL "P2W")
+    set(I2S_DATA_PIN "6")
+    set(I2S_CLOCK_PIN_BASE "7")
 else()  # M2
     set(I2S_DATA_PIN "9")
     set(I2S_CLOCK_PIN_BASE "10")
@@ -71,6 +76,14 @@ option(PS2_KEYBOARD_ENABLED "Enable PS/2 keyboard input" ON)
 
 # Verbose debug logging toggle
 option(DEBUG_LOGS_ENABLED "Enable verbose debug logging" OFF)
+
+option(NETCARD_ENABLED "Virtual WiFi network card in slot 1" OFF)
+option(NETCARD_TLS "HTTPS for the network card" OFF)
+option(NETCARD_TLS_VERIFY "Verify server TLS certificates with bundled CA roots" ON)
+option(NETCARD_REALTIME "Supabase Realtime typing channel" OFF)
+if(NETCARD_REALTIME AND (NOT NETCARD_ENABLED OR NOT NETCARD_TLS))
+    message(FATAL_ERROR "NETCARD_REALTIME requires NETCARD_ENABLED and NETCARD_TLS")
+endif()
 
 message(STATUS "FRANK Apple - Apple IIe Emulator for RP2350")
 if (PSRAM_SPEED)
@@ -91,7 +104,9 @@ endif()
 set(OUTPUT_DIR "${CMAKE_SOURCE_DIR}/bin/${CMAKE_BUILD_TYPE}")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${OUTPUT_DIR}")
 
-IF(BOARD_VARIANT STREQUAL "M2")
+IF(BOARD_VARIANT STREQUAL "P2W")
+    SET(BUILD_NAME "p2w-${BUILD_NAME}")
+ELSEIF(BOARD_VARIANT STREQUAL "M2")
     if (PICO_BOARD STREQUAL "pico")
         SET(BUILD_NAME "m2p1-${BUILD_NAME}")
     else()
@@ -110,6 +125,9 @@ IF(VIDEO_VGA)
 endif ()
 IF(VIDEO_HDMI)
     SET(BUILD_NAME "${BUILD_NAME}-HDMI")
+endif ()
+IF(VIDEO_SPI)
+    SET(BUILD_NAME "${BUILD_NAME}-SPI")
 endif ()
 
 SET(BUILD_NAME "${BUILD_NAME}-${CPU_SPEED}MHz")
@@ -158,6 +176,10 @@ endif()
 
 if (VIDEO_VGA)
     list(APPEND DRIVER_SOURCES drivers/vga.c)
+endif()
+
+if (VIDEO_SPI)
+    list(APPEND DRIVER_SOURCES drivers/spi_lcd.c)
 endif()
 
 # Create a library for drivers
@@ -289,6 +311,13 @@ if (VIDEO_VGA)
     )
 endif()
 
+if (VIDEO_SPI)
+    target_compile_definitions(${BUILD_NAME} PRIVATE
+        VIDEO_SPI
+        VIDEO=SPI
+    )
+endif()
+
 if(PS2_KEYBOARD_ENABLED)
     target_compile_definitions(${BUILD_NAME} PRIVATE ENABLE_PS2_KEYBOARD=1)
 else()
@@ -342,6 +371,72 @@ else()
     pico_enable_stdio_usb(${BUILD_NAME} 1)
 endif()
 pico_enable_stdio_uart(${BUILD_NAME} 1)
+
+if(NETCARD_ENABLED)
+    target_sources(${BUILD_NAME} PRIVATE src/mii_netcard.c)
+    target_link_libraries(${BUILD_NAME}
+        pico_cyw43_arch_lwip_poll
+    )
+    if(NETCARD_TLS)
+        target_link_libraries(${BUILD_NAME}
+            pico_lwip_mbedtls
+            pico_mbedtls
+        )
+        target_compile_definitions(${BUILD_NAME} PRIVATE
+            NETCARD_TLS=1
+        )
+        if(NETCARD_TLS_VERIFY)
+            # Bundle the CA roots as a NUL-terminated C array for mbedTLS.
+            file(READ "${CMAKE_CURRENT_LIST_DIR}/certs/supabase-roots.pem" _nc_ca_hex HEX)
+            string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _nc_ca_bytes "${_nc_ca_hex}")
+            file(WRITE "${CMAKE_BINARY_DIR}/generated/netcard_ca.h"
+                "#pragma once\nstatic const unsigned char netcard_ca_pem[] = { ${_nc_ca_bytes}0x00 };\n#define NETCARD_CA_PEM_LEN sizeof(netcard_ca_pem)\n")
+            target_compile_definitions(${BUILD_NAME} PRIVATE
+                NETCARD_TLS_VERIFY=1
+                ALTCP_MBEDTLS_AUTHMODE=MBEDTLS_SSL_VERIFY_REQUIRED
+            )
+        endif()
+    endif()
+    target_compile_definitions(${BUILD_NAME} PRIVATE
+        NETCARD_ENABLED=1
+        CYW43_PIO_CLOCK_DIV_INT=4
+    )
+    if(NETCARD_REALTIME)
+        target_sources(${BUILD_NAME} PRIVATE src/netcard_realtime.c)
+        target_link_libraries(${BUILD_NAME} pico_rand)
+        target_compile_definitions(${BUILD_NAME} PRIVATE
+            NETCARD_REALTIME=1
+        )
+    endif()
+    set(SECRETS_FILE "" CACHE FILEPATH "cmake file setting WIFI_SSID and WIFI_PASS")
+    if(SECRETS_FILE)
+        include(${SECRETS_FILE})
+    endif()
+    if(NOT WIFI_SSID)
+        set(WIFI_SSID unset)
+    endif()
+    if(NOT WIFI_PASS)
+        set(WIFI_PASS unset)
+    endif()
+    set(NETCARD_HOST "10.0.0.153" CACHE STRING "netcard HTTP host")
+    set(NETCARD_PORT "8080" CACHE STRING "netcard HTTP port")
+    set(NETCARD_PATH "/woz.txt" CACHE STRING "netcard HTTP path")
+    set(NETCARD_API_KEY "" CACHE STRING "netcard API key, empty to omit")
+    set(NETCARD_ACCEPT "*/*" CACHE STRING "netcard HTTP Accept header")
+    if(SUPABASE_ANON_KEY)
+        set(NETCARD_API_KEY ${SUPABASE_ANON_KEY})
+    endif()
+    set(NETCARD_RT_TOPIC "apple2" CACHE STRING "supabase realtime topic")
+    if(SUPABASE_HOST)
+        set(NETCARD_RT_HOST ${SUPABASE_HOST})
+    else()
+        set(NETCARD_RT_HOST "")
+    endif()
+    string(REGEX REPLACE "^https?://" "" NETCARD_RT_HOST "${NETCARD_RT_HOST}")
+    string(REGEX REPLACE "/$" "" NETCARD_RT_HOST "${NETCARD_RT_HOST}")
+    configure_file(src/netcard_config.h.in ${CMAKE_BINARY_DIR}/generated/netcard_config.h @ONLY)
+    target_include_directories(${BUILD_NAME} PRIVATE ${CMAKE_BINARY_DIR}/generated)
+endif()
 
 # Create UF2 output
 pico_add_extra_outputs(${BUILD_NAME})

@@ -5,6 +5,7 @@
  * Features inverted title bar, compact 6x8 font, proper selection highlighting
  */
 
+#include "board_config.h"
 #include <pico.h>
 #include <pico/stdlib.h>
 #include <hardware/sync.h>
@@ -307,16 +308,16 @@ extern char selected_dir[128];
 void disk_ui_show(void) {
     if (ui_state == DISK_UI_HIDDEN) {
         { // TODO: error handling
-            gpio_put(PICO_DEFAULT_LED_PIN, true);
+            FRANK_LED_PUT(true);
             f_open(&fp, "/tmp/apple.snap", FA_CREATE_ALWAYS | FA_WRITE);
             UINT wb;
             f_write(&fp, vram, sizeof(vram), &wb); // TODO: save only pages, requerid to be saved
             f_close(&fp);
-            gpio_put(PICO_DEFAULT_LED_PIN, false);
+            FRANK_LED_PUT(false);
         }
         fb_needs_clear = true;
 
-        gpio_put(PICO_DEFAULT_LED_PIN, true);
+        FRANK_LED_PUT(true);
         // Scan for disk images
         int count = disk_scan_directory(selected_dir);
         if (count < 0) {
@@ -324,7 +325,7 @@ void disk_ui_show(void) {
             strcpy(selected_dir, "/");
         }
         printf("Found %d disk images\n", count);
-        gpio_put(PICO_DEFAULT_LED_PIN, false);
+        FRANK_LED_PUT(false);
 
         ui_state = DISK_UI_SELECT_DRIVE;
         selected_drive = 0;
@@ -336,13 +337,13 @@ void disk_ui_show(void) {
 
 void disk_ui_hide(void) {
     { // TODO: error handling
-        gpio_put(PICO_DEFAULT_LED_PIN, true);
+        FRANK_LED_PUT(true);
         if (FR_OK == f_open(&fp, "/tmp/apple.snap", FA_READ)) {
             UINT rb;
             f_read(&fp, vram, sizeof(vram), &rb);
             f_close(&fp);
         }
-        gpio_put(PICO_DEFAULT_LED_PIN, false);
+        FRANK_LED_PUT(false);
     }
 
     ui_state = DISK_UI_HIDDEN;
@@ -380,7 +381,7 @@ void disk_ui_show_loading(void) {
     ui_rendered = false;
 }
 
-static bool read_only = true;
+static bool read_only = false;  // disks are writable unless you tick Read-only with SPACE; writes go to the .bdsk copy, the original image is never touched
 static bool bdsk_exists = false;
 static bool bdsk_recreate = false;
 #define has_parent_dir  (strcmp(selected_dir, "/") != 0)
@@ -456,6 +457,7 @@ static void handle_disk_loaded(void) {
             )
         ) {
             printf("Disk UI: disk mounted successfully\n");
+            disk_autoboot_save(selected_drive);
             
             if (selected_action == 0) {  // BOOT
                 printf("Disk UI: resetting CPU for disk boot\n");
@@ -607,7 +609,8 @@ bool disk_ui_handle_key(uint8_t key) {
                         // file -> action menu
                         ui_state = DISK_UI_SELECT_ACTION;
                         /// read current prefereces for this drive, may be overriden later
-                        read_only = !g_loaded_disks[selected_drive].write_back;
+                        // an empty drive slot must not read as "read-only"
+                        read_only = g_loaded_disks[selected_drive].loaded ? !g_loaded_disks[selected_drive].write_back : false;
                         selected_action = 0;
                         ui_dirty = true;
                         MII_DEBUG_PRINTF("Disk UI: selecting action for file %d\n", selected_file);
@@ -633,6 +636,10 @@ bool disk_ui_handle_key(uint8_t key) {
                     
                     disk_ui_show_loading();
                     int base = has_parent_dir ? 1 : 0;
+                    if (g_loaded_disks[selected_drive].loaded && g_mii) {
+                        // flush and clear the old disk under its own name before the slot is reused
+                        disk_eject_from_emulator(selected_drive, g_mii, g_disk2_slot);
+                    }
                     if (disk_load_image(selected_drive, selected_file - base, !read_only) == 0) {
                         handle_disk_loaded();
                     } else {

@@ -178,7 +178,15 @@ void init_spi(void)
 	float clkdiv = 3.0f;
 	int cpol = 0;
 	int cpha = 0;
-	uint cpha0_prog_offs = pio_add_program(pio_spi.pio, &spi_cpha0_program);
+	// init_spi() runs again on every mount retry: claim the state machine and
+	// load the program once, re-init the SM each time.
+	static bool pio_spi_claimed = false;
+	static uint cpha0_prog_offs = 0;
+	if (!pio_spi_claimed) {
+		pio_sm_claim(pio_spi.pio, pio_spi.sm);
+		cpha0_prog_offs = pio_add_program(pio_spi.pio, &spi_cpha0_program);
+		pio_spi_claimed = true;
+	}
 	pio_spi_init(pio_spi.pio, pio_spi.sm,
 				cpha0_prog_offs,
 				8,       // 8 bits per SPI frame
