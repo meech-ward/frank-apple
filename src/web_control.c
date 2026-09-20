@@ -258,7 +258,12 @@ void web_control_toggle(void) {
     }
     struct tcp_pcb *pcb=tcp_new_ip_type(IPADDR_TYPE_V4);
     if(!pcb) return;
-    if(tcp_bind(pcb,IP_ANY_TYPE,80)!=ERR_OK) { tcp_close(pcb); return; }
+    ip_set_option(pcb, SOF_REUSEADDR);
+    err_t bind_error=tcp_bind(pcb,IP_ANY_TYPE,80);
+    if(bind_error!=ERR_OK) {
+        MII_DEBUG_PRINTF("web: cannot bind port 80 (%d)\n",bind_error);
+        tcp_close(pcb); return;
+    }
     listener=tcp_listen_with_backlog(pcb,2);
     if(!listener) { tcp_close(pcb); return; }
     tcp_accept(listener,accepted); enabled=true;

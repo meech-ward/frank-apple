@@ -7,6 +7,8 @@
 #define MEM_SIZE                    4000
 #define MEMP_NUM_TCP_SEG            32
 #if NETCARD_WEB_CONTROL
+/* Re-enable the listener while old HTTP connections are in TIME_WAIT. */
+#define SO_REUSE                    1
 /* Four HTTP clients plus HTTPS/Realtime, with headroom during closing. */
 #define MEMP_NUM_TCP_PCB            10
 #endif
