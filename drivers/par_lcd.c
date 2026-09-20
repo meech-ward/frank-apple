@@ -170,7 +170,9 @@ static void lcd_cmd_data(uint8_t cmd, const uint8_t *data, size_t len) {
     lcd_wait_idle();
     if (len) {
         gpio_put(LCD_PIN_DC, 1);
-        lcd_write_blocking(data, len);
+        // Command arrays may live in XIP; DMA keeps running during flash lockout.
+        for (size_t i = 0; i < len; ++i) lcd_put_byte(data[i]);
+        lcd_wait_idle();
     }
     gpio_put(LCD_PIN_CS, 1);
 }

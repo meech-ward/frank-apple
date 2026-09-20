@@ -103,10 +103,10 @@ static struct altcp_tls_config *s_tls_cfg;
 
 /* Link monitor: the status register is read at most every 500 ms;
  * while the link stays down a rejoin is attempted 5 s after the drop
- * and every 10 s after that. Never blocks, never sleeps. */
+ * and allows each association/DHCP attempt 30 s. Never blocks, never sleeps. */
 #define NC_LINK_CHECK_US (500u * 1000u)
 #define NC_LINK_RETRY_FIRST_US (5u * 1000u * 1000u)
-#define NC_LINK_RETRY_EVERY_US (10u * 1000u * 1000u)
+#define NC_LINK_JOIN_TIMEOUT_US (30u * 1000u * 1000u)
 
 static uint32_t s_link_check_last;
 static uint32_t s_reconnect_at;
@@ -384,7 +384,7 @@ nc_start_fetch(void)
 /* Link monitor, called from netcard_poll(). Reads the link status at
  * most every 500 ms. CYW43_LINK_UP sets link = 1, anything else sets
  * link = 0; each transition logs once. While the link stays down the
- * join is retried 5 s after the drop, then every 10 s. A fetch in
+ * join is retried 5 s after the drop, then every 30 s. A fetch in
  * flight when the link drops is torn down to ERROR. */
 static void
 nc_link_poll(uint32_t now)
@@ -394,11 +394,19 @@ nc_link_poll(uint32_t now)
         return;
     s_link_check_last = now;
     st = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
+    static int last_status = 99;
+    if (st != last_status) {
+        MII_DEBUG_PRINTF("netcard: link status=%d\n", st);
+        last_status = st;
+    }
     if (st == CYW43_LINK_UP) {
         if (!s_nc.link) {
             s_nc.link = 1;
             MII_DEBUG_PRINTF("netcard: wifi up, ip %s\n",
                     ip4addr_ntoa(netif_ip4_addr(netif_default)));
+            int32_t rssi;
+            if (cyw43_wifi_get_rssi(&cyw43_state, &rssi) == 0)
+                MII_DEBUG_PRINTF("netcard: signal %ld dBm\n", (long)rssi);
         }
         return;
     }
@@ -411,8 +419,8 @@ nc_link_poll(uint32_t now)
             nc_fail();
         }
     } else if ((int32_t)(now - s_reconnect_at) >= 0) {
-        s_reconnect_at = now + NC_LINK_RETRY_EVERY_US;
-        MII_DEBUG_PRINTF("netcard: wifi retry\n");
+        s_reconnect_at = now + NC_LINK_JOIN_TIMEOUT_US;
+        MII_DEBUG_PRINTF("netcard: wifi retry status=%d\n", st);
         cyw43_arch_wifi_connect_async(WIFI_SSID, WIFI_PASS,
                 CYW43_AUTH_WPA2_AES_PSK);
     }
@@ -426,18 +434,20 @@ netcard_init(void)
     /* Link starts down; the monitor below tracks the async join. */
     s_nc.link = 0;
     s_link_check_last = 0;
-    s_reconnect_at = time_us_32() + NC_LINK_RETRY_FIRST_US;
+    s_reconnect_at = time_us_32() + NC_LINK_JOIN_TIMEOUT_US;
     int r = cyw43_arch_init();
     if (r != 0) {
         MII_DEBUG_PRINTF("netcard: cyw43 init failed %d\n", r);
         s_nc.init_ok = false;
         return;
     }
+    MII_DEBUG_PRINTF("netcard: radio initialized\n");
     s_nc.init_ok = true;
     cyw43_arch_enable_sta_mode();
     /* Async join: the emulator starts at once, no 15 s block. */
-    cyw43_arch_wifi_connect_async(WIFI_SSID, WIFI_PASS,
+    r = cyw43_arch_wifi_connect_async(WIFI_SSID, WIFI_PASS,
             CYW43_AUTH_WPA2_AES_PSK);
+    MII_DEBUG_PRINTF("netcard: join requested rc=%d\n", r);
 }
 
 #if NETCARD_REALTIME

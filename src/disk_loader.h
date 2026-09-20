@@ -42,6 +42,7 @@ typedef struct {
     uint32_t size;          // Size of image data
     disk_type_t type;       // Type of disk image
     char filename[MAX_FILENAME_LEN];
+    char directory[128];
     bool loaded;            // True if image is loaded
     bool write_back;        // Unused on RP2350 (kept for compatibility)
 } loaded_disk_t;
@@ -114,6 +115,6 @@ int disk_autoboot_mount(struct mii_t *mii, int slot);
 // drive: 0 or 1 (Drive 1 or Drive 2)
 // mii: pointer to the emulator instance
 // slot: slot number where disk2 card is installed (usually 6)
-void disk_eject_from_emulator(int drive, struct mii_t *mii, int slot);
+int disk_eject_from_emulator(int drive, struct mii_t *mii, int slot);
 
 #endif // DISK_LOADER_H

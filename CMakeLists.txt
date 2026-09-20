@@ -108,7 +108,9 @@ if(EXISTS ${PICO_EXTRAS_PATH}/external/pico_extras_import.cmake)
     include(${PICO_EXTRAS_PATH}/external/pico_extras_import.cmake)
 endif()
 
-set(OUTPUT_DIR "${CMAKE_SOURCE_DIR}/bin/${CMAKE_BUILD_TYPE}")
+# Keep board/USB/PSRAM configurations isolated; shared archives can silently
+# link objects compiled for a different board or feature set.
+set(OUTPUT_DIR "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${OUTPUT_DIR}")
 
 IF(BOARD_VARIANT STREQUAL "P2W")
@@ -348,8 +350,11 @@ else()
 endif()
 
 if(DEBUG_LOGS_ENABLED)
+    target_compile_definitions(${BUILD_NAME} PRIVATE PICO_STDIO_USB_CONNECT_WAIT_TIMEOUT_MS=5000)
+    target_compile_definitions(drivers PRIVATE ENABLE_DEBUG_LOGS=1)
     target_compile_definitions(${BUILD_NAME} PRIVATE ENABLE_DEBUG_LOGS=1)
 else()
+    target_compile_definitions(drivers PRIVATE ENABLE_DEBUG_LOGS=0)
     target_compile_definitions(${BUILD_NAME} PRIVATE ENABLE_DEBUG_LOGS=0)
 endif()
 

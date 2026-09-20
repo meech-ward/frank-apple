@@ -40,6 +40,10 @@ static_assert((FLASHDISK_OFFSET % FLASH_SECTOR_SIZE) == 0, "flashdisk offset not
 static_assert((FLASHDISK_SIZE % FLASH_SECTOR_SIZE) == 0, "flashdisk size not erase multiple");
 static_assert(FLASHDISK_SIZE % FLASHDISK_SECTOR_SIZE == 0, "flashdisk size not sector multiple");
 
+static_assert(FLASHDISK_OFFSET >= 4u * 1024u * 1024u, "flashdisk overlaps firmware");
+static_assert(FLASHDISK_OFFSET <= PICO_FLASH_SIZE_BYTES &&
+              FLASHDISK_SIZE <= PICO_FLASH_SIZE_BYTES - FLASHDISK_OFFSET, "flashdisk exceeds flash");
+
 static bool s_ready = false;
 static bool s_logged = false;
 static uint32_t s_erase_count = 0;
@@ -86,6 +90,10 @@ static DRESULT flashdisk_erase_program(uint32_t offs) {
     if (rc != PICO_OK) {
         printf("flashdisk: erase/program @0x%08lx failed rc=%d\n",
                (unsigned long)offs, rc);
+        return RES_ERROR;
+    }
+    if (memcmp((const void *)(XIP_BASE + offs), s_sector_buf, FLASH_SECTOR_SIZE) != 0) {
+        printf("flashdisk: verify failed @0x%08lx\n", (unsigned long)offs);
         return RES_ERROR;
     }
     s_erase_count++;

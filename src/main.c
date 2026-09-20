@@ -261,7 +261,7 @@ static uint8_t typing_buf[TYPING_SIZE];
 static uint32_t typing_head;
 static uint32_t typing_len;
 
-void typing_push(const uint8_t *s, size_t n) {
+static void typing_push_raw(const uint8_t *s, size_t n) {
     size_t i;
     for (i = 0; i < n; i++) {
         if (typing_len >= TYPING_SIZE)
@@ -283,6 +283,13 @@ static uint8_t typing_map(uint8_t c) {
     return c;
 }
 
+void typing_push(const uint8_t *s, size_t n) {
+    for (size_t i = 0; i < n && typing_len < TYPING_SIZE; ++i) {
+        uint8_t c = typing_map(s[i]);
+        typing_push_raw(&c, 1);
+    }
+}
+
 // Drain one byte per frame into the emulated keyboard.
 static void typing_drain_one(void) {
     uint8_t c;
@@ -291,7 +298,7 @@ static void typing_drain_one(void) {
     c = typing_buf[typing_head];
     typing_head = (typing_head + 1) % TYPING_SIZE;
     typing_len--;
-    mii_keypress(&g_mii, typing_map(c));
+    mii_keypress(&g_mii, c);
 }
 
 static void process_serial_keyboard(void) {
@@ -328,8 +335,8 @@ static const uint8_t tufty_btn_key[TB_COUNT] = { 0, 0x0B, 0x0A, 0x0D, 0x1B, ' ' 
 
 static void tufty_board_early_init(void) {
     gpio_init(POWER_EN_PIN);
-    gpio_set_dir(POWER_EN_PIN, GPIO_OUT);
     gpio_put(POWER_EN_PIN, 1);
+    gpio_set_dir(POWER_EN_PIN, GPIO_OUT);
     for (int i = 0; i < TB_COUNT; i++) {
         gpio_init(tufty_btn_pin[i]);
         gpio_set_dir(tufty_btn_pin[i], GPIO_IN);
@@ -348,22 +355,26 @@ static void tufty_button_emit(int i) {
     if (disk_ui_is_visible()) {
         disk_ui_handle_key(key);
     } else {
-        typing_push(&key, 1);
+        typing_push_raw(&key, 1);
     }
 }
 
 static void tufty_buttons_poll(void) {
     static bool down[TB_COUNT];
+    static bool raw_down[TB_COUNT];
     static uint32_t changed_us[TB_COUNT];
     static uint32_t repeat_us[TB_COUNT];
     uint32_t now = time_us_32();
     for (int i = 0; i < TB_COUNT; i++) {
         bool pressed = !gpio_get(tufty_btn_pin[i]);
-        if (pressed != down[i]) {
-            if (now - changed_us[i] < 20000)   // debounce
-                continue;
-            down[i] = pressed;
+        if (pressed != raw_down[i]) {
+            raw_down[i] = pressed;
             changed_us[i] = now;
+        }
+        if (now - changed_us[i] < 20000)
+            continue;
+        if (pressed != down[i]) {
+            down[i] = pressed;
             if (pressed) {
                 tufty_button_emit(i);
                 repeat_us[i] = now + 450000;
@@ -525,10 +536,12 @@ static __not_in_flash() void core1_main(void) {
     
     while (1) {
         sleep_ms(16);
+        mutex_enter_blocking(&video_mutex);
         if (!disk_ui_is_visible()) {
             video_core_iteration();
         }
         graphics_present();
+        mutex_exit(&video_mutex);
 
         // Wait until the swap has actually happened (vsync tick), then rotate buffers.
         // This avoids writing into the buffer currently being scanned out.
@@ -616,6 +629,7 @@ static bool __not_in_flash_func() timer_callback(repeating_timer_t *rt) {
 #endif
 
 int main() {
+    mutex_init(&video_mutex);
 #ifdef BOARD_TUFTY
     tufty_board_early_init();   // POWER_EN first: keeps the badge alive on battery
 #endif
@@ -771,11 +785,6 @@ int main() {
         MII_DEBUG_PRINTF("SD card not available (will run without disks)\n");
     }
     
-    // Virtual WiFi network card (needs SD driver's PIO claimed first)
-#if NETCARD_ENABLED
-    netcard_init();
-#endif
-
     // Initialize the Apple IIe emulator
     MII_DEBUG_PRINTF("Initializing Apple IIe emulator...\n");
     mii_init(&g_mii);
@@ -926,6 +935,8 @@ int main() {
     for (int i = 0; i < 2000 && !multicore_lockout_victim_is_initialized(1); i++) {
         sleep_us(100);
     }
+    if (!multicore_lockout_victim_is_initialized(1))
+        panic("Core 1 flash lockout initialization timed out");
     MII_DEBUG_PRINTF("Core 1 flash lockout victim: %s\n", multicore_lockout_victim_is_initialized(1) ? "ready" : "NOT ready");
 #endif
     MII_DEBUG_PRINTF("Core 1 launched\n");
@@ -948,6 +959,12 @@ int main() {
 #endif
 #ifdef FEATURE_AUDIO_PWM_BEEPER
     PWM_init_pin(BEEPER_PIN, (1 << 12) - 1);
+#endif
+
+    // Start joining only when the polling loop is ready. ROM/disk startup can
+    // take seconds, during which poll-mode CYW43 cannot service association.
+#if NETCARD_ENABLED
+    netcard_init();
 #endif
 
     MII_DEBUG_PRINTF("Starting emulation on core 0...\n");
@@ -1208,8 +1225,10 @@ int main() {
         disk_ui_was_visible = disk_ui_now;
 
         __dmb();
-        if (disk_ui_now && !video_core_iteration_in_progress) {
+        if (disk_ui_now) {
+            mutex_enter_blocking(&video_mutex);
             disk_ui_render(graphics_get_buffer(), HDMI_WIDTH, HDMI_HEIGHT);
+            mutex_exit(&video_mutex);
         } else {
             // Run CPU for one frame worth of cycles.
             // VBL timing is now handled by mii_video_vbl_timer_cb which toggles
@@ -1276,6 +1295,9 @@ int main() {
                 last_mode_key = mode_key;
             }
         }
+#ifdef BOARD_TUFTY
+        FRANK_LED_PUT(mii_disk2_get_motor_state() != 0);
+#endif
         // frame_count is now incremented by the VBL timer callback
         uint32_t frame_end = time_us_32();
         total_emu_time += (frame_end - frame_start);

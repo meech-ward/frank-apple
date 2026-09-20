@@ -9,6 +9,10 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "pico/mutex.h"
+
+// Serializes menu RAM reuse and framebuffer writes with the video core.
+extern mutex_t video_mutex;
 
 // Forward declaration
 struct mii_t;

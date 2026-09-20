@@ -18,6 +18,8 @@
 #include "mii_bank.h"
 #include "debug_log.h"
 
+mutex_t video_mutex;
+
 // External function to clear held key state (from main.c)
 extern void clear_held_key(void);
 bool disk_bdsk_exists2(const char *filename);
@@ -306,14 +308,21 @@ extern FIL fp;
 extern char selected_dir[128];
 
 void disk_ui_show(void) {
+    mutex_enter_blocking(&video_mutex);
     if (ui_state == DISK_UI_HIDDEN) {
-        { // TODO: error handling
-            FRANK_LED_PUT(true);
-            f_open(&fp, "/tmp/apple.snap", FA_CREATE_ALWAYS | FA_WRITE);
-            UINT wb;
-            f_write(&fp, vram, sizeof(vram), &wb); // TODO: save only pages, requerid to be saved
-            f_close(&fp);
-            FRANK_LED_PUT(false);
+        FRANK_LED_PUT(true);
+        FRESULT fr = f_open(&fp, "/tmp/apple.snap", FA_CREATE_ALWAYS | FA_WRITE);
+        UINT wb = 0;
+        if (fr == FR_OK) {
+            fr = f_write(&fp, vram, sizeof(vram), &wb);
+            FRESULT close_fr = f_close(&fp);
+            if (close_fr != FR_OK) fr = close_fr;
+        }
+        FRANK_LED_PUT(false);
+        if (fr != FR_OK || wb != sizeof(vram)) {
+            printf("Disk UI: snapshot save failed; menu remains closed\n");
+            mutex_exit(&video_mutex);
+            return;
         }
         fb_needs_clear = true;
 
@@ -333,17 +342,24 @@ void disk_ui_show(void) {
         ui_rendered = false;
         MII_DEBUG_PRINTF("Disk UI: showing drive selection\n");
     }
+    mutex_exit(&video_mutex);
 }
 
 void disk_ui_hide(void) {
-    { // TODO: error handling
-        FRANK_LED_PUT(true);
-        if (FR_OK == f_open(&fp, "/tmp/apple.snap", FA_READ)) {
-            UINT rb;
-            f_read(&fp, vram, sizeof(vram), &rb);
-            f_close(&fp);
-        }
-        FRANK_LED_PUT(false);
+    mutex_enter_blocking(&video_mutex);
+    FRANK_LED_PUT(true);
+    FRESULT fr = f_open(&fp, "/tmp/apple.snap", FA_READ);
+    UINT rb = 0;
+    if (fr == FR_OK) {
+        fr = f_read(&fp, vram, sizeof(vram), &rb);
+        FRESULT close_fr = f_close(&fp);
+        if (close_fr != FR_OK) fr = close_fr;
+    }
+    FRANK_LED_PUT(false);
+    if (fr != FR_OK || rb != sizeof(vram)) {
+        printf("Disk UI: snapshot restore failed; emulator remains paused\n");
+        mutex_exit(&video_mutex);
+        return;
     }
 
     ui_state = DISK_UI_HIDDEN;
@@ -351,6 +367,7 @@ void disk_ui_hide(void) {
     ui_dirty = false;
     g_last_framebuffer = NULL;
     MII_DEBUG_PRINTF("Disk UI: hidden\n");
+    mutex_exit(&video_mutex);
 }
 
 void disk_ui_toggle(void) {
@@ -445,6 +462,7 @@ static bool disk_ui_delete_selected_file(void)
 // Handle loading complete - mount disk and perform action
 static void handle_disk_loaded(void) {
     disk_ui_hide();
+    if (disk_ui_is_visible()) return;
     if (g_mii) {
         int preserve_state = (selected_action == 1) ? 1 : 0;  // INSERT preserves state
         if (0 == disk_mount_to_emulator(
@@ -638,7 +656,11 @@ bool disk_ui_handle_key(uint8_t key) {
                     int base = has_parent_dir ? 1 : 0;
                     if (g_loaded_disks[selected_drive].loaded && g_mii) {
                         // flush and clear the old disk under its own name before the slot is reused
-                        disk_eject_from_emulator(selected_drive, g_mii, g_disk2_slot);
+                        if (disk_eject_from_emulator(selected_drive, g_mii, g_disk2_slot) < 0) {
+                            ui_state = DISK_UI_SELECT_FILE;
+                            ui_dirty = true;
+                            break;
+                        }
                     }
                     if (disk_load_image(selected_drive, selected_file - base, !read_only) == 0) {
                         handle_disk_loaded();
@@ -757,7 +779,7 @@ bool disk_ui_handle_key(uint8_t key) {
                 int drive = selected_drive;
                 if (g_loaded_disks[drive].loaded) {
                     // eject from emulator (flush + clear floppy)
-                    disk_eject_from_emulator(drive, g_mii, g_disk2_slot);
+                    if (disk_eject_from_emulator(drive, g_mii, g_disk2_slot) < 0) break;
                     // clear loader state
                     disk_unload_image(drive);
                     ui_dirty = true;

@@ -104,7 +104,7 @@ _mii_disk2_lss_tick(
 mii_card_disk2_t *_mish_d2 = NULL;
 
 // in disk_loader.c: write back a modified track (declared early for the motor-off flush)
-void disk_write_track(uint8_t drive, uint8_t track_id, mii_t* mii);
+int disk_write_track(uint8_t drive, uint8_t track_id, mii_t* mii);
 
 /*
  * This timer is used to turn off the motor after a second
@@ -116,7 +116,7 @@ _mii_floppy_motor_off_cb(
 {
 	mii_card_disk2_t *c = param;
 	mii_floppy_t *f 	= &c->floppy[c->selected];
-//	printf("%s drive %d off\n", __func__, c->selected);
+    printf("motor off: drive=%u qtrack=%u\n", c->selected, f->qtrack);
 	if (c->drive[c->selected].file && f->seed_dirty != f->seed_saved)
 		mii_floppy_update_tracks(f, c->drive[c->selected].file);
 	{	// loader-mounted media (no c->drive[].file): persist the resident track when the motor stops,
@@ -124,7 +124,10 @@ _mii_floppy_motor_off_cb(
 		uint8_t t = f->track_id[f->qtrack];
 		if (t < MII_FLOPPY_TRACK_COUNT && f->tracks[t].dirty) {
 			printf("motor off: flushing track %u\n", (unsigned)t);
-			disk_write_track(c->selected, t, mii);
+			if (disk_write_track(c->selected, t, mii) < 0) {
+                printf("motor off: flush failed; retaining dirty track\n");
+                return 1000000 * mii->speed;
+            }
 		}
 	}
 	f->motor = 0;
@@ -141,9 +144,9 @@ _mii_floppy_lss_cb(
 		void * param );
 
 // in disk_loader.c :
-void disk_reload_track(uint8_t drive, uint8_t track_id, mii_t* mii);
+int disk_reload_track(uint8_t drive, uint8_t track_id, mii_t* mii);
 // Write back any modified disk image track to SD card
-void disk_write_track(uint8_t drive, uint8_t track_id, mii_t* mii);
+int disk_write_track(uint8_t drive, uint8_t track_id, mii_t* mii);
 
 static uint8_t
 _mii_disk2_switch_track(
@@ -169,14 +172,21 @@ _mii_disk2_switch_track(
         	track_id < MII_FLOPPY_TRACK_COUNT &&
         	f->tracks[track_id].dirty
 		) {
-			disk_write_track(c->selected, track_id, mii);
+			if (disk_write_track(c->selected, track_id, mii) < 0) {
+                mii->state = MII_STOPPED;
+                return f->qtrack;
+            }
 		}
 	}
 	if (track_id_new >= MII_FLOPPY_TRACK_COUNT)
 		track_id_new = MII_FLOPPY_NOISE_TRACK;
 	if (track_id != track_id_new) {
-		if (track_id_new != MII_FLOPPY_NOISE_TRACK)
-			disk_reload_track(c->selected, track_id_new, mii);
+		if (track_id_new != MII_FLOPPY_NOISE_TRACK) {
+            if (disk_reload_track(c->selected, track_id_new, mii) < 0) {
+                mii->state = MII_STOPPED;
+                return f->qtrack;
+            }
+        }
 		else {
 			printf("noising track %d\n", track_id_new);
 			memcpy(f->curr_track_data, noize, sizeof(noize));
@@ -319,6 +329,12 @@ _mii_disk2_access(
 		case 0x0A:
 		case 0x0B: {
 			if (on != c->selected) {
+                uint8_t t = f->track_id[f->qtrack];
+                if (!f->write_protected && t < MII_FLOPPY_TRACK_COUNT && f->tracks[t].dirty &&
+                    disk_write_track(c->selected, t, mii) < 0) {
+                    mii->state = MII_STOPPED;
+                    return 0;
+                }
 				c->selected = on;
 			//	printf("SELECTED DRIVE: %d\n", c->selected);
 				c->floppy[on].motor = f->motor;
@@ -354,7 +370,9 @@ _mii_disk2_access(
 			if (write) {
 			//	printf("%s: IMW Write something register? %2x\n", __func__,byte);
 			}
-			ret = c->iwm_mode;
+            // Q6 high / Q7 low exposes the disk's write-protect sense on bit 7.
+            // Returning only iwm_mode made DOS report success for discarded writes.
+            ret = (c->iwm_mode & 0x7f) | (f->write_protected ? 0x80 : 0);
 			break;
 		// on  | on  | 	Write mode register (if drive is off)
 		//				data register       (if drive is on)
@@ -1008,7 +1026,7 @@ _mii_disk2_lss_tick(
 		c->data_register = 0;
 		mii_raise_signal(c->sig + SIG_DR, c->data_register);
 	}
-	if ((c->lss_mode & (1 << Q7_WRITE_BIT)) &&
+	if (!f->write_protected && (c->lss_mode & (1 << Q7_WRITE_BIT)) &&
 					track_id < MII_FLOPPY_TRACK_COUNT) {
 		// on state 0 and 8 we write a bit...
 		if ((c->lss_state & 0b0111) == 0) {

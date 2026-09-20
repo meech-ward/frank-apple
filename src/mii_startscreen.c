@@ -304,6 +304,10 @@ int mii_startscreen_show(mii_startscreen_info_t *info) {
     
     MII_DEBUG_PRINTF("Start screen: Rendered, waiting 3s...\n");
 
+#ifdef VIDEO_PAR
+    graphics_present();
+#endif
+
     // Show for 3 seconds using busy-wait
     // NOTE: sleep_ms() causes HDMI signal instability, likely due to low-power mode
     uint32_t start_time = time_us_32();

@@ -95,6 +95,8 @@ pico_board_cmake_set(PICO_RP2350A, 0)
 #define PLL_SYS_POSTDIV2 (1)
 #define SYS_CLK_HZ       (250000000)
 #define BW_VREG_VOLTAGE  (0b01101)  // 1.20V
+#define SYS_CLK_VREG_VOLTAGE_AUTO_ADJUST 1
+#define SYS_CLK_VREG_VOLTAGE_MIN BW_VREG_VOLTAGE
 
 // 200 MHz - Most of our testing was done at 200MHz.
 // ./build/micropython/lib/pico-sdk/src/rp2_common/hardware_clocks/scripts/vcocalc.py --cmake 200
@@ -144,7 +146,7 @@ pico_board_cmake_set(PICO_RP2350A, 0)
 #define PICO_BOOT_STAGE2_CHOOSE_W25Q080 1
 
 #ifndef PICO_FLASH_SPI_CLKDIV
-#define PICO_FLASH_SPI_CLKDIV 2
+#define PICO_FLASH_SPI_CLKDIV 4
 #endif
 
 pico_board_cmake_set_default(PICO_FLASH_SIZE_BYTES, (16 * 1024 * 1024))

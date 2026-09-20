@@ -40,7 +40,7 @@ uint8_t *drive0_cache = PSRAM_DATA;
 // time from its .bdsk through s_bdsk_fp0, kept open while mounted.
 static FIL s_bdsk_fp0;
 static bool s_bdsk_fp0_open = false;
-static char s_bdsk_fp0_path[256];
+static char s_bdsk_fp0_path[272];
 #endif
 #endif
 
@@ -64,8 +64,24 @@ static bool sd_mounted = false;
 
 // reduce stack usage, by global variables
 FIL fp;
-char path[256];
+char path[272];
 char selected_dir[128] __scratch_y("selected_dir") = "/apple";
+
+// Accept captured absolute mount paths as well as names in the menu directory.
+static bool disk_image_path(char *out, size_t size, const char *filename, bool sidecar) {
+    const char *dot = strrchr(filename, '.');
+    const char *suffix = sidecar && !(dot && !strcasecmp(dot, ".bdsk")) ? ".bdsk" : "";
+    int n;
+    if (filename[0] == '/')
+        n = snprintf(out, size, "%s%s", filename, suffix);
+    else
+        n = snprintf(out, size, "%s/%s%s", selected_dir, filename, suffix);
+    if (n < 0 || (size_t)n >= size) {
+        printf("disk: image path too long\n");
+        return false;
+    }
+    return true;
+}
 
 static bool disk_open_original_image_file(const char *filename, FIL *out_fp, char *out_path, size_t out_path_len) {
     if (!sd_mounted)
@@ -73,12 +89,12 @@ static bool disk_open_original_image_file(const char *filename, FIL *out_fp, cha
     if (!filename || !out_fp)
         return false;
 
-    snprintf(path, sizeof(path), "%s/%s", selected_dir, filename);
+    if (!disk_image_path(path, sizeof(path), filename, false)) return false;
     FRESULT fr = f_open(out_fp, path, FA_READ);
     if (fr != FR_OK) {
         return false;
     }
-    if (out_path && out_path_len) {
+    if (out_path && out_path_len && out_path != path) {
         strncpy(out_path, path, out_path_len - 1);
         out_path[out_path_len - 1] = '\0';
     }
@@ -95,9 +111,9 @@ static bool disk_open_bdsk_image_file(FIL *out_fp, const char *filename, char *o
     bool is_bdsk = (dot && strcasecmp(dot, ".bdsk") == 0);
 
     if (is_bdsk) {
-        snprintf(path, sizeof(path), "%s/%s", selected_dir, filename);
+        if (!disk_image_path(path, sizeof(path), filename, false)) return false;
     } else {
-        snprintf(path, sizeof(path), "%s/%s.bdsk", selected_dir, filename);
+        if (!disk_image_path(path, sizeof(path), filename, true)) return false;
     }
     
     FRESULT fr = f_open(out_fp, path, FA_READ | FA_WRITE | FA_OPEN_ALWAYS);
@@ -105,7 +121,7 @@ static bool disk_open_bdsk_image_file(FIL *out_fp, const char *filename, char *o
         printf("%s: f_open(%s) failed: %d\n", __func__, path, fr);
         return false;
     }
-    if (out_path && out_path_len) {
+    if (out_path && out_path_len && out_path != path) {
         strncpy(out_path, path, out_path_len - 1);
         out_path[out_path_len - 1] = '\0';
     }
@@ -131,9 +147,9 @@ static bool disk_bdsk_stream_ensure_open(const char *filename) {
 
     char bpath[sizeof(s_bdsk_fp0_path)];
     if (is_bdsk) {
-        snprintf(bpath, sizeof(bpath), "%s/%s", selected_dir, filename);
+        if (!disk_image_path(bpath, sizeof(bpath), filename, true)) return false;
     } else {
-        snprintf(bpath, sizeof(bpath), "%s/%s.bdsk", selected_dir, filename);
+        if (!disk_image_path(bpath, sizeof(bpath), filename, true)) return false;
     }
 
     if (s_bdsk_fp0_open) {
@@ -188,7 +204,7 @@ static int disk_bdsk_stream_read_track(mii_floppy_t *floppy, uint8_t track_id) {
     }
 
     br = 0;
-    fr = f_read(&s_bdsk_fp0, floppy->curr_track_data, BDSK_TRACK_DATA_SIZE, &br);
+    fr = f_read(&s_bdsk_fp0, track_buf, BDSK_TRACK_DATA_SIZE, &br);
     if (fr != FR_OK || br != BDSK_TRACK_DATA_SIZE) {
         printf("%s: data read track %u failed fr=%d br=%u\n", __func__, (unsigned)track_id, fr, br);
         return -1;
@@ -199,6 +215,7 @@ static int disk_bdsk_stream_read_track(mii_floppy_t *floppy, uint8_t track_id) {
         return -1;
     }
 
+    memcpy(floppy->curr_track_data, track_buf, BDSK_TRACK_DATA_SIZE);
     mii_floppy_track_t *dst = &floppy->tracks[track_id];
     dst->bit_count = desc.bit_count;
     dst->virgin = 0;
@@ -351,8 +368,7 @@ static int disk_load_floppy_dsk_from_fatfs(int drive, mii_floppy_t *floppy, mii_
         if (disk_dump_current_track(drive, track, floppy, file, &target) < 0)
             goto fail;
     }
-    f_close(&target);
-    return 0;
+    return f_close(&target) == FR_OK ? 0 : -1;
 fail:
     f_close(&target);
     return -1;
@@ -387,8 +403,7 @@ static int disk_load_floppy_nib_from_fatfs(int drive, mii_floppy_t *floppy, mii_
         if (disk_dump_current_track(drive, track, floppy, file, &target) < 0)
             goto fail;
     }
-    f_close(&target);
-    return 0;
+    return f_close(&target) == FR_OK ? 0 : -1;
 fail:
     f_close(&target);
     return -1;
@@ -408,17 +423,17 @@ static int disk_load_floppy_woz_from_fatfs(int drive, mii_floppy_t *floppy, mii_
 	uint8_t magic[4];
 	FRESULT fr = f_lseek(fp, 0);
 	if (fr != FR_OK)
-		return -1;
+		goto fail;
 	UINT br = 0;
 	fr = f_read(fp, magic, sizeof(magic), &br);
 	if (fr != FR_OK || br != sizeof(magic))
-		return -1;
+		goto fail;
 
 	bool is_woz2 = (memcmp(magic, "WOZ2", 4) == 0);
 	bool is_woz1 = (memcmp(magic, "WOZ", 3) == 0 && !is_woz2);
 	if (!is_woz2 && !is_woz1) {
 		printf("%s: not a WOZ file\n", __func__);
-		return -1;
+		goto fail;
 	}
 
 	// Scan chunks (WOZ chunk ordering is not guaranteed)
@@ -431,11 +446,11 @@ static int disk_load_floppy_woz_from_fatfs(int drive, mii_floppy_t *floppy, mii_
 	while (off + sizeof(chunk) <= file_size) {
 		fr = f_lseek(fp, off);
 		if (fr != FR_OK)
-			return -1;
+			goto fail;
 		br = 0;
 		fr = f_read(fp, &chunk, sizeof(chunk), &br);
 		if (fr != FR_OK || br != sizeof(chunk))
-			return -1;
+			goto fail;
 		const uint32_t size = le32toh(chunk.size_le);
 		const uint32_t payload_off = off + (uint32_t)sizeof(chunk);
 		if (payload_off + size > file_size)
@@ -515,8 +530,7 @@ static int disk_load_floppy_woz_from_fatfs(int drive, mii_floppy_t *floppy, mii_
             if (disk_dump_current_track(drive, i, floppy, file, &target) < 0)
                 goto fail;
 		}
-        f_close(&target);
-		return 2;
+        return f_close(&target) == FR_OK ? 2 : -1;
 	}
     // WOZ1 TRKS payload is 35 fixed-size track entries (6656 bytes)
     for (int i = 0; i < 35 && i < MII_FLOPPY_TRACK_COUNT; i++) {
@@ -540,8 +554,7 @@ static int disk_load_floppy_woz_from_fatfs(int drive, mii_floppy_t *floppy, mii_
         if (disk_dump_current_track(drive, i, floppy, file, &target) < 0)
             goto fail;
     }
-    f_close(&target);
-    return 1;
+    return f_close(&target) == FR_OK ? 1 : -1;
 fail:
     f_close(&target);
     return -1;
@@ -570,14 +583,14 @@ disk_load_floppy_bdsk_track_from_fatfs(
 #if PICO_RP2350 && PSRAM_MAX_FREQ_MHZ
     if (!drive) { // drive #0
         memcpy(&desc, drive0_cache + track_offset, sizeof(bdsk_track_desc_t));
-        memcpy(floppy->curr_track_data, drive0_cache + track_offset + sizeof(bdsk_track_desc_t), BDSK_TRACK_DATA_SIZE);
+        memcpy(track_buf, drive0_cache + track_offset + sizeof(bdsk_track_desc_t), BDSK_TRACK_DATA_SIZE);
         goto ok;
     }
 #endif
 #if PICO_RP2350
     if (butter_psram_size()) { // drive #1
         memcpy(&desc, PSRAM_DATA + BDSK_BYTES + track_offset, sizeof(bdsk_track_desc_t));
-        memcpy(floppy->curr_track_data, PSRAM_DATA + BDSK_BYTES + track_offset + sizeof(bdsk_track_desc_t), BDSK_TRACK_DATA_SIZE);
+        memcpy(track_buf, PSRAM_DATA + BDSK_BYTES + track_offset + sizeof(bdsk_track_desc_t), BDSK_TRACK_DATA_SIZE);
         goto ok;
     }
 #endif
@@ -598,7 +611,7 @@ disk_load_floppy_bdsk_track_from_fatfs(
     /* --- read track data --- */
     fr = f_read(
         fp,
-        floppy->curr_track_data,
+        track_buf,
         BDSK_TRACK_DATA_SIZE,
         &br
     );
@@ -607,6 +620,7 @@ disk_load_floppy_bdsk_track_from_fatfs(
 ok:
     if (desc.bit_count == 0 || desc.bit_count > BDSK_MAX_BITS)
         return -1;
+    memcpy(floppy->curr_track_data, track_buf, BDSK_TRACK_DATA_SIZE);
     /* --- update floppy state --- */
     mii_floppy_track_t *dst = &floppy->tracks[track_id];
     dst->bit_count = desc.bit_count;
@@ -697,7 +711,7 @@ bool disk_bdsk_exists2(const char *filename) {
     if (is_bdsk) {
         return false;
     }
-    snprintf(path, sizeof(path), "%s/%s.bdsk", selected_dir, filename);
+    if (!disk_image_path(path, sizeof(path), filename, true)) return false;
     return f_stat(path, &fno) == FR_OK;
 }
 
@@ -707,9 +721,9 @@ static bool disk_bdsk_exists(const char *filename) {
     bool is_bdsk = (dot && strcasecmp(dot, ".bdsk") == 0);
 
     if (is_bdsk) {
-        snprintf(path, sizeof(path), "%s/%s", selected_dir, filename);
+        if (!disk_image_path(path, sizeof(path), filename, false)) return false;
     } else {
-        snprintf(path, sizeof(path), "%s/%s.bdsk", selected_dir, filename);
+        if (!disk_image_path(path, sizeof(path), filename, true)) return false;
     }
 
     return f_stat(path, &fno) == FR_OK;
@@ -889,6 +903,7 @@ int disk_load_image(int drive, int index, bool write) {
     disk->type = entry->type;
     strncpy(disk->filename, entry->filename, MAX_FILENAME_LEN - 1);
     disk->filename[MAX_FILENAME_LEN - 1] = '\0';
+    snprintf(disk->directory, sizeof(disk->directory), "%s", selected_dir);
     disk->loaded = true;
     disk->write_back = write;
 
@@ -938,7 +953,7 @@ static uint8_t disk_type_to_mii_format(disk_type_t type, const char *filename) {
     }
 }
 
-void disk_write_track(uint8_t drive, uint8_t track_id, mii_t* mii);
+int disk_write_track(uint8_t drive, uint8_t track_id, mii_t* mii);
 
 // Mount a loaded disk image to the emulator
 // preserve_state: if true, keeps motor/head position for disk swap during game
@@ -971,12 +986,12 @@ int disk_mount_to_emulator(int drive, mii_t *mii, int slot, int preserve_state, 
         old_track < MII_FLOPPY_TRACK_COUNT &&
         floppy->tracks[old_track].dirty)
     {
-        disk_write_track(drive, old_track, mii);
+        if (disk_write_track(drive, old_track, mii) < 0) return -1;
     }
     
     // Set up the mii_dd_file_t structure (no file->map backing on RP2350)
     memset(file, 0, sizeof(*file));
-    strncpy(file->pathname, disk->filename, sizeof(file->pathname));  // Just point to our filename
+    snprintf(file->pathname, sizeof(file->pathname), "%s/%s", disk->directory, disk->filename);
     file->format = disk_type_to_mii_format(disk->type, disk->filename);
     file->read_only = read_only;
     disk->write_back = !read_only;  // the loader flag must agree with the mount policy (Astra)
@@ -1026,7 +1041,7 @@ int disk_mount_to_emulator(int drive, mii_t *mii, int slot, int preserve_state, 
             res = 0; // .bdsk needs no conversion; stream it below
         } else if (bdsk_recreate || !disk_bdsk_exists(file->pathname)) {
             // Open the image on SD
-            if (!disk_open_original_image_file(disk->filename, &fp, path, sizeof(path))) {
+            if (!disk_open_original_image_file(file->pathname, &fp, path, sizeof(path))) {
                 printf("Failed to open disk image %s\n", disk->filename);
                 return -1;
             }
@@ -1047,7 +1062,7 @@ int disk_mount_to_emulator(int drive, mii_t *mii, int slot, int preserve_state, 
                     res = -1;
                     break;
             }
-            f_close(&fp);
+            if (f_close(&fp) != FR_OK) res = -1;
         } else {
             res = 0; // .bdsk is already on SD; stream it below
         }
@@ -1066,7 +1081,7 @@ int disk_mount_to_emulator(int drive, mii_t *mii, int slot, int preserve_state, 
 #endif
     if (bdsk_recreate || !disk_bdsk_exists(file->pathname)) {
         // Open the image on SD
-        if (!disk_open_original_image_file(disk->filename, &fp, path, sizeof(path))) {
+        if (!disk_open_original_image_file(file->pathname, &fp, path, sizeof(path))) {
             printf("Failed to open disk image %s\n", disk->filename);
             return -1;
         }
@@ -1090,23 +1105,25 @@ int disk_mount_to_emulator(int drive, mii_t *mii, int slot, int preserve_state, 
                 res = -1;
                 break;
         }
-        f_close(&fp);
+        if (f_close(&fp) != FR_OK) res = -1;
     } else {
         // bdsk есть → НЕ КОНВЕРТИРУЕМ
         if (!disk_open_bdsk_image_file(&fp, file->pathname, path, sizeof(path)))
             return -1;
         res = disk_load_floppy_bdsk_from_fatfs(drive, floppy, file, &fp);
-        f_close(&fp);
+        if (f_close(&fp) != FR_OK) res = -1;
     }
-#if !(PICO_RP2350 && !PSRAM_MAX_FREQ_MHZ)
+#if PICO_RP2350 && !PSRAM_MAX_FREQ_MHZ
+    if (drive && res >= 0) {
+#else
     if (res >= 0) {
+#endif
         if (!disk_open_bdsk_image_file(&fp, file->pathname, path, sizeof(path))) {
             return -1;
         }
         res = disk_load_floppy_bdsk_track_from_fatfs(drive, floppy, file, &fp, track_id);
-        f_close(&fp);
+        if (f_close(&fp) != FR_OK) res = -1;
     }
-#endif
 
     if (res < 0) {
         printf("Failed to load disk image to floppy: %d\n", res);
@@ -1127,43 +1144,47 @@ int disk_mount_to_emulator(int drive, mii_t *mii, int slot, int preserve_state, 
 
 extern int g_disk2_slot; // slot for Disk II
 
-void disk_reload_track(uint8_t drive, uint8_t track_id, mii_t* mii) {
+int disk_reload_track(uint8_t drive, uint8_t track_id, mii_t* mii) {
+    if (drive > 1 || track_id >= BDSK_TRACKS) return -1;
     loaded_disk_t *disk = &g_loaded_disks[drive];
     if (!disk->loaded || !disk->filename[0]) {
         printf("No disk loaded in drive %d\n", drive + 1);
-        return;
+        return -1;
     }
     // Get the floppy structures from the disk2 card
     mii_floppy_t *floppies[2] = {NULL, NULL};
     int res = mii_slot_command(mii, g_disk2_slot, MII_SLOT_D2_GET_FLOPPY, floppies);
     if (res < 0 || !floppies[drive]) {
         printf("Failed to get floppy structure for drive %d (slot %d)\n", drive + 1, g_disk2_slot);
-        return;
+        return -1;
     }
     mii_floppy_t *floppy = floppies[drive];
     mii_dd_file_t *file = &g_dd_files[drive];
 #if PICO_RP2350 && !PSRAM_MAX_FREQ_MHZ
     if (!drive) {
         // Drive 0 streams through the persistent handle (stays open).
-        if (!disk_bdsk_stream_ensure_open(disk->filename)) {
+        if (!disk_bdsk_stream_ensure_open(file->pathname)) {
             printf("Failed to open disk image %s\n", disk->filename);
-            return;
+            return -1;
         }
         res = disk_load_floppy_bdsk_track_from_fatfs(drive, floppy, file, NULL, track_id);
     } else
 #endif
     {
-        if (!disk_open_bdsk_image_file(&fp, disk->filename, path, sizeof(path))) {
+        if (!disk_open_bdsk_image_file(&fp, file->pathname, path, sizeof(path))) {
             printf("Failed to open disk image %s\n", disk->filename);
-            return;
+            return -1;
         }
         res = disk_load_floppy_bdsk_track_from_fatfs(drive, floppy, file, &fp, track_id);
-        f_close(&fp);
+        if (f_close(&fp) != FR_OK) {
+            res = -1;
+        }
     }
 
     if (res < 0) {
         printf("Failed to load disk image track %d to floppy: %d\n", track_id, res);
     }
+    return res;
 }
 
 static int
@@ -1190,6 +1211,7 @@ disk_write_floppy_bdsk_track_to_fatfs(
 
     src->dirty = 0;
     floppy->seed_saved = floppy->seed_dirty;
+    printf("disk: saved drive=%d track=%u\n", drive, track_id);
     return 0;
 }
 
@@ -1213,22 +1235,23 @@ disk_write_floppy_woz_track_to_fatfs(
     return 0;
 }
 
-void disk_write_track(uint8_t drive, uint8_t track_id, mii_t* mii) {
+int disk_write_track(uint8_t drive, uint8_t track_id, mii_t* mii) {
+    if (drive > 1 || track_id >= BDSK_TRACKS) return -1;
     loaded_disk_t *disk = &g_loaded_disks[drive];
     if (!disk->loaded || !disk->filename[0]) {
         printf("No disk loaded in drive %d\n", drive + 1);
-        return;
+        return -1;
     }
     if (!disk->write_back) {
         printf("RO disk in drive %d\n", drive + 1);
-        return;
+        return -1;
     }
     // Get the floppy structures from the disk2 card
     mii_floppy_t *floppies[2] = {NULL, NULL};
     int res = mii_slot_command(mii, g_disk2_slot, MII_SLOT_D2_GET_FLOPPY, floppies);
     if (res < 0 || !floppies[drive]) {
         printf("Failed to get floppy structure for drive %d (slot %d)\n", drive + 1, g_disk2_slot);
-        return;
+        return -1;
     }
     mii_floppy_t *floppy = floppies[drive];
     mii_dd_file_t *file = &g_dd_files[drive];
@@ -1237,37 +1260,41 @@ void disk_write_track(uint8_t drive, uint8_t track_id, mii_t* mii) {
         // Write-back reuses the same FIL as the read stream, so the
         // handle never goes stale; f_sync inside the writer makes it
         // durable. No close/reopen cycle is needed.
-        if (!disk_bdsk_stream_ensure_open(disk->filename)) {
+        if (!disk_bdsk_stream_ensure_open(file->pathname)) {
             printf("Failed to open disk image %s\n", disk->filename);
-            return;
+            return -1;
         }
         res = disk_write_floppy_bdsk_track_to_fatfs(drive, floppy, file, &s_bdsk_fp0, track_id);
     } else
 #endif
     {
-        if (!disk_open_bdsk_image_file(&fp, disk->filename, path, sizeof(path))) {
+        if (!disk_open_bdsk_image_file(&fp, file->pathname, path, sizeof(path))) {
             printf("Failed to open disk image %s\n", disk->filename);
-            return;
+            return -1;
         }
         res = disk_write_floppy_bdsk_track_to_fatfs(drive, floppy, file, &fp, track_id);
-        f_close(&fp);
+        if (f_close(&fp) != FR_OK) {
+            floppy->tracks[track_id].dirty = 1;
+            res = -1;
+        }
     }
 
     if (res < 0) {
         printf("Failed to write disk image track %d to floppy: %d\n", track_id, res);
     }
+    return res;
 }
 
 // Eject a disk from the emulator
-void disk_eject_from_emulator(int drive, mii_t *mii, int slot) {
-    if (drive < 0 || drive > 1) return;
+int disk_eject_from_emulator(int drive, mii_t *mii, int slot) {
+    if (drive < 0 || drive > 1) return -1;
     
     // Get the floppy structures from the disk2 card
     mii_floppy_t *floppies[2] = {NULL, NULL};
     int res = mii_slot_command(mii, slot, MII_SLOT_D2_GET_FLOPPY, floppies);
     if (res < 0 || !floppies[drive]) {
         printf("Failed to get floppy structure for drive %d\n", drive + 1);
-        return;
+        return -1;
     }
     
     /* 🔴 flush current track before eject */
@@ -1276,7 +1303,7 @@ void disk_eject_from_emulator(int drive, mii_t *mii, int slot) {
         track_id < MII_FLOPPY_TRACK_COUNT &&
         floppies[drive]->tracks[track_id].dirty)
     {
-        disk_write_track(drive, track_id, mii);
+        if (disk_write_track(drive, track_id, mii) < 0) return -1;
     }
     
     // Re-initialize the floppy (clears all data, makes it "empty")
@@ -1291,6 +1318,7 @@ void disk_eject_from_emulator(int drive, mii_t *mii, int slot) {
 #endif
 
     printf("Drive %d ejected\n", drive + 1);
+    return 0;
 }
 
 #if !PSRAM_MAX_FREQ_MHZ
@@ -1316,7 +1344,7 @@ void disk_autoboot_save(int drive) {
         return;
     }
     UINT bw;
-    f_write(&f, selected_dir, strlen(selected_dir), &bw);
+    f_write(&f, disk->directory, strlen(disk->directory), &bw);
     f_write(&f, "\n", 1, &bw);
     f_write(&f, disk->filename, strlen(disk->filename), &bw);
     f_write(&f, "\n", 1, &bw);
