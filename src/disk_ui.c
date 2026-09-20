@@ -17,6 +17,9 @@
 #include "mii_sw.h"
 #include "mii_bank.h"
 #include "debug_log.h"
+#if NETCARD_WEB_CONTROL
+#include "web_control.h"
+#endif
 
 mutex_t video_mutex;
 
@@ -767,6 +770,13 @@ bool disk_ui_handle_key(uint8_t key) {
             break;
 
         case ' ':  // Space = toggle Read-Only
+#if NETCARD_WEB_CONTROL
+            if (ui_state == DISK_UI_SELECT_DRIVE) {
+                web_control_toggle();
+                ui_dirty = true;
+                handled = true;
+            }
+#endif
             if (ui_state == DISK_UI_SELECT_ACTION) {
                 read_only = !read_only;
                 ui_dirty = true;
@@ -895,6 +905,16 @@ void disk_ui_render(uint8_t *framebuffer, int width, int height) {
             strcpy(drive2_text, "Drive 2: (empty)");
         }
         draw_menu_item(framebuffer, width, content_x, y, content_width, drive2_text, max_chars, drive == 1);
+#if NETCARD_WEB_CONTROL
+        y += 30;
+        draw_string(framebuffer, width, content_x, y,
+            web_control_enabled() ? "[C/Space] Web control: ON" : "[C/Space] Web control: OFF", COLOR_TEXT);
+        char address[48];
+        web_control_address(address, sizeof(address));
+        draw_string(framebuffer, width, content_x, y + 14, address, COLOR_TEXT);
+        draw_string(framebuffer, width, content_x, y + 28, "Open on a phone or computer on this WiFi.", COLOR_TEXT);
+        draw_string(framebuffer, width, content_x, y + 42, "Turns off when the badge restarts.", COLOR_TEXT);
+#endif
         
         // Instructions below dialog border - clear area first
         int footer_y = UI_Y + UI_HEIGHT + 4;

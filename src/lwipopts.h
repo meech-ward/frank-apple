@@ -6,6 +6,10 @@
 #define MEM_ALIGNMENT               4
 #define MEM_SIZE                    4000
 #define MEMP_NUM_TCP_SEG            32
+#if NETCARD_WEB_CONTROL
+/* Four HTTP clients plus HTTPS/Realtime, with headroom during closing. */
+#define MEMP_NUM_TCP_PCB            10
+#endif
 #define MEMP_NUM_ARP_QUEUE          10
 #define PBUF_POOL_SIZE              24
 #define LWIP_ARP                    1

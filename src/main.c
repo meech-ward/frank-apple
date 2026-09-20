@@ -38,6 +38,7 @@
 #include "disk_loader.h"
 #include "mii_startscreen.h"
 #include "disk_ui.h"
+#include "typing.h"
 #include "debug_log.h"
 
 #ifdef MII_RP2350
@@ -260,6 +261,7 @@ static void serial_dump_text_page(void) {
 static uint8_t typing_buf[TYPING_SIZE];
 static uint32_t typing_head;
 static uint32_t typing_len;
+static uint64_t typing_resume_at;
 
 static void typing_push_raw(const uint8_t *s, size_t n) {
     size_t i;
@@ -290,15 +292,86 @@ void typing_push(const uint8_t *s, size_t n) {
     }
 }
 
+bool typing_try_push(const uint8_t *s, size_t n) {
+    if (n > TYPING_SIZE - typing_len) return false;
+    typing_push(s, n);
+    return true;
+}
+
+size_t typing_pending(void) { return typing_len; }
+
+void remote_control_key(uint8_t key) {
+    if (key == 0x1D) {
+        typing_len = 0;
+        disk_ui_toggle();
+    } else if (disk_ui_is_visible()) {
+        disk_ui_handle_key(key);
+    } else if (key == 3) {
+        typing_len = 0;
+        typing_resume_at = 0;
+        mii_keypress(&g_mii, 3); // Stop takes priority over a pasted program.
+    } else {
+        typing_push_raw(&key, 1);
+    }
+}
+
+bool remote_control_graphics(void) {
+    return !SWW_GETSTATE(g_mii.sw_state, SWTEXT);
+}
+
+bool remote_control_basic_prompt(void) {
+    if (disk_ui_is_visible() || remote_control_graphics() || typing_len ||
+        time_us_64() < typing_resume_at || SWW_GETSTATE(g_mii.sw_state, SW80COL) ||
+        (mii_bank_peek(&g_mii.bank[MII_BANK_SW], SWAKD) & 0x80)) return false;
+    /* Monitor CH/CV/WNDLFT: recognize an empty, visible 40-column ']' input
+     * line. This is a UI hint, not an execution acknowledgment or ROM hook. */
+    uint8_t col = mii_read_one(&g_mii, 0x24);
+    uint8_t row = mii_read_one(&g_mii, 0x25);
+    uint8_t left = mii_read_one(&g_mii, 0x20);
+    if (col != 1 || row >= 24 || left >= 40) return false;
+    uint16_t base = SWW_GETSTATE(g_mii.sw_state, SWPAGE2) ? 0x800 : 0x400;
+    uint16_t addr = base + (row & 7) * 0x80 + (row / 8) * 0x28 + left;
+    return (mii_read_one(&g_mii, addr) & 0x7f) == ']';
+}
+
+size_t remote_control_screen(char *out, size_t cap) {
+    if (cap < 985) return 0;
+    size_t n = 0;
+    if (disk_ui_is_visible()) {
+        const char *msg = "DISK MENU OPEN - use the badge display and arrow buttons.\n";
+        size_t len = strlen(msg);
+        memcpy(out, msg, len + 1);
+        return len;
+    }
+    uint16_t base = SWW_GETSTATE(g_mii.sw_state, SWPAGE2) ? 0x800 : 0x400;
+    for (int row = 0; row < 24; ++row) {
+        uint16_t addr = base + (row & 7) * 0x80 + (row / 8) * 0x28;
+        for (int col = 0; col < 40; ++col) {
+            if (remote_control_graphics() && row < 20) { out[n++] = ' '; continue; }
+            uint8_t ch = mii_read_one(&g_mii, addr + col) & 0x7f;
+            if (ch < 0x20) ch += 0x40;
+            out[n++] = ch == 0x7f ? ' ' : (char)ch;
+        }
+        out[n++] = '\n';
+    }
+    out[n] = 0;
+    return n;
+}
+
 // Drain one byte per frame into the emulated keyboard.
 static void typing_drain_one(void) {
     uint8_t c;
     if (typing_len == 0)
         return;
+    if (disk_ui_is_visible() || time_us_64() < typing_resume_at)
+        return;
+    if (mii_bank_peek(&g_mii.bank[MII_BANK_SW], SWAKD) & 0x80)
+        return; // The Apple must consume the current key before we replace it.
     c = typing_buf[typing_head];
     typing_head = (typing_head + 1) % TYPING_SIZE;
     typing_len--;
     mii_keypress(&g_mii, c);
+    if (c == '\r') typing_resume_at = time_us_64() + 500000;
 }
 
 static void process_serial_keyboard(void) {
@@ -306,6 +379,10 @@ static void process_serial_keyboard(void) {
     uint8_t b;
     if (c < 0)
         return;
+    if (c == 3 && !disk_ui_is_visible()) {
+        remote_control_key(3);
+        return;
+    }
     if (c == 0x1C) {
         serial_dump_text_page();
         return;

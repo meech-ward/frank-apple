@@ -47,6 +47,9 @@
 #include "mii_slot.h"
 #include "debug_log.h"
 #include "netcard.h"
+#if NETCARD_WEB_CONTROL
+#include "web_control.h"
+#endif
 
 #include "netcard_config.h"
 
@@ -481,6 +484,9 @@ netcard_poll(void)
     nc_link_poll(time_us_32());
 #if NETCARD_REALTIME
     netcard_realtime_poll();
+#endif
+#if NETCARD_WEB_CONTROL
+    web_control_poll();
 #endif
 }
 
