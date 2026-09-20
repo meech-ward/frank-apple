@@ -33,7 +33,7 @@
  */
 
 // Default to M1 if no config specified
-#if !defined(BOARD_M1) && !defined(BOARD_M2) && !defined(BOARD_P2W)
+#if !defined(BOARD_M1) && !defined(BOARD_M2) && !defined(BOARD_P2W) && !defined(BOARD_TUFTY)
 #define BOARD_M1
 #endif
 
@@ -68,12 +68,16 @@ static inline uint get_psram_pin(void) {
     return 0;
 #endif
 #if PICO_RP2350
+#ifdef BOARD_TUFTY
+    return 8;  // Tufty 2350: 8 MB PSRAM chip select on GPIO8 (RP2350B, not the M1/M2 GPIO47 layout)
+#else
     uint32_t package_sel = *((io_ro_32*)(SYSINFO_BASE + SYSINFO_PACKAGE_SEL_OFFSET));
     if (package_sel & 1) {
         return PSRAM_PIN_RP2350A;
     } else {
         return PSRAM_PIN_RP2350B;
     }
+#endif
 #endif
 }
 
@@ -241,6 +245,65 @@ static inline uint get_psram_pin(void) {
 #endif // BOARD_P2W
 
 //=============================================================================
+// TUFTY Layout Configuration (Pimoroni Tufty 2350 badge, RP2350B)
+//=============================================================================
+// ST7789 320x240 on an 8-bit 8080 parallel bus driven by PIO2 (GPIO base 16 so
+// the data pins 32-39 are reachable). No SD card: FatFs runs on a region of the
+// 16 MB flash (drivers/flashdisk). 8 MB PSRAM on CS GPIO8. Radio (CYW43) on
+// 23/24/25/29 exactly like the Pico W, so the cyw43 driver is unchanged.
+// Pin table: pimoroni/tufty2350 board/pins.csv.
+#ifdef BOARD_TUFTY
+
+// ST7789 parallel display
+#define LCD_PIN_BL   26
+#define LCD_PIN_CS   27
+#define LCD_PIN_DC   28   // "RS" on the badge schematic
+#define LCD_PIN_WR   30   // PIO side-set: write strobe
+#define LCD_PIN_RD   31   // held high (never read from the panel)
+#define LCD_PIN_D0   32   // DB0..DB7 = GPIO32..39
+#define LCD_PIN_TE   21   // panel tearing-effect output: input only, never drive it
+#define LCD_PIO      pio2
+#define LCD_PIO_GPIO_BASE 16
+#define LCD_PIO_MAX_HZ (44u * 1000u * 1000u)   // Pimoroni's ceiling for the parallel PIO clock
+
+// Buttons: active low, pull-ups on the badge
+#define BTN_DOWN_PIN 6
+#define BTN_A_PIN    7
+#define BTN_B_PIN    9
+#define BTN_C_PIN    10
+#define BTN_UP_PIN   11
+#define BTN_HOME_PIN 22
+
+// Rear white case LEDs, GPIO0..3: the disk activity light
+#define CASE_LED_MASK 0x0Fu
+
+// Power
+#define POWER_EN_PIN    41   // hold high so the badge stays on when running from the LiPo
+#define VBUS_DETECT_PIN 12
+#define VBAT_SENSE_PIN  40
+
+// Flash-resident FAT volume (drivers/flashdisk): the last 12 MB of the 16 MB flash.
+// The firmware is linked into the first 4 MB (memmap.ld FLASH LENGTH = 4096k).
+#define FLASHDISK_ENABLED 1
+#define FLASHDISK_OFFSET  (4u * 1024u * 1024u)
+#define FLASHDISK_SIZE    (12u * 1024u * 1024u)
+
+// No NES pad, no PS/2, no speaker: keep those drivers on GPIOs that have no pad on the badge.
+#define NESPAD_DISABLED 1
+#define NESPAD_GPIO_CLK   16
+#define NESPAD_GPIO_DATA  17
+#define NESPAD_GPIO_LATCH 18
+#define PS2_PIN_CLK  16
+#define PS2_PIN_DATA 17
+#define I2S_DATA_PIN       16
+#define I2S_CLOCK_PIN_BASE 17
+#define PWM_RIGHT_PIN 16
+#define PWM_LEFT_PIN  16
+#define BEEPER_PIN    16
+
+#endif // BOARD_TUFTY
+
+//=============================================================================
 // Apple IIe Display Configuration
 //=============================================================================
 
@@ -266,7 +329,11 @@ static inline uint get_psram_pin(void) {
 // PICO_DEFAULT_LED_PIN is undefined there. Make the LED a no-op in that case.
 //=============================================================================
 #include "hardware/gpio.h"
-#ifdef PICO_DEFAULT_LED_PIN
+#if defined(BOARD_TUFTY)
+// Tufty 2350: the four rear case LEDs (GPIO0..3) are the drive light.
+#define FRANK_LED_PUT(v) gpio_put_masked(CASE_LED_MASK, (v) ? CASE_LED_MASK : 0u)
+#define FRANK_LED_INIT() do { gpio_init_mask(CASE_LED_MASK); gpio_set_dir_out_masked(CASE_LED_MASK); gpio_put_masked(CASE_LED_MASK, 0u); } while (0)
+#elif defined(PICO_DEFAULT_LED_PIN)
 #define FRANK_LED_PUT(v) gpio_put(PICO_DEFAULT_LED_PIN, (v))
 #define FRANK_LED_INIT() do { gpio_init(PICO_DEFAULT_LED_PIN); gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT); } while (0)
 #else

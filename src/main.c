@@ -316,6 +316,66 @@ static void process_serial_keyboard(void) {
     typing_push(&b, 1);
 }
 
+#ifdef BOARD_TUFTY
+// Tufty 2350 badge: power latch, case LEDs, and the six buttons. HOME opens and
+// closes the disk menu (same as F11 / console Ctrl-]); while the menu is open
+// UP/DOWN move, A is Enter, B is Esc, C toggles Read-only (space). With the
+// menu closed the same buttons type into the Apple: up/down arrows, Return,
+// Esc, space, so a game or a prompt can be driven with no keyboard attached.
+enum { TB_HOME, TB_UP, TB_DOWN, TB_A, TB_B, TB_C, TB_COUNT };
+static const uint8_t tufty_btn_pin[TB_COUNT] = { BTN_HOME_PIN, BTN_UP_PIN, BTN_DOWN_PIN, BTN_A_PIN, BTN_B_PIN, BTN_C_PIN };
+static const uint8_t tufty_btn_key[TB_COUNT] = { 0, 0x0B, 0x0A, 0x0D, 0x1B, ' ' };
+
+static void tufty_board_early_init(void) {
+    gpio_init(POWER_EN_PIN);
+    gpio_set_dir(POWER_EN_PIN, GPIO_OUT);
+    gpio_put(POWER_EN_PIN, 1);
+    for (int i = 0; i < TB_COUNT; i++) {
+        gpio_init(tufty_btn_pin[i]);
+        gpio_set_dir(tufty_btn_pin[i], GPIO_IN);
+        gpio_pull_up(tufty_btn_pin[i]);
+    }
+    FRANK_LED_INIT();
+}
+
+static void tufty_button_emit(int i) {
+    uint8_t key = tufty_btn_key[i];
+    if (i == TB_HOME) {
+        do { __dmb(); } while (video_core_iteration_in_progress);
+        disk_ui_toggle();
+        return;
+    }
+    if (disk_ui_is_visible()) {
+        disk_ui_handle_key(key);
+    } else {
+        typing_push(&key, 1);
+    }
+}
+
+static void tufty_buttons_poll(void) {
+    static bool down[TB_COUNT];
+    static uint32_t changed_us[TB_COUNT];
+    static uint32_t repeat_us[TB_COUNT];
+    uint32_t now = time_us_32();
+    for (int i = 0; i < TB_COUNT; i++) {
+        bool pressed = !gpio_get(tufty_btn_pin[i]);
+        if (pressed != down[i]) {
+            if (now - changed_us[i] < 20000)   // debounce
+                continue;
+            down[i] = pressed;
+            changed_us[i] = now;
+            if (pressed) {
+                tufty_button_emit(i);
+                repeat_us[i] = now + 450000;
+            }
+        } else if (pressed && (i == TB_UP || i == TB_DOWN) && (int32_t)(now - repeat_us[i]) >= 0) {
+            tufty_button_emit(i);              // key repeat while held
+            repeat_us[i] = now + 90000;
+        }
+    }
+}
+#endif // BOARD_TUFTY
+
 static void process_keyboard(void) {
     int pressed;
     unsigned char key;
@@ -446,6 +506,11 @@ static __not_in_flash() void video_core_iteration(void) {
 #if defined(PICO_RP2350) || (defined(RAM_PAGES_PER_POOL) && defined(MAX_PAGES_PER_POOL) && (RAM_PAGES_PER_POOL == MAX_PAGES_PER_POOL))
 // Core 1 - Video rendering loop
 static __not_in_flash() void core1_main(void) {
+#if FLASHDISK_ENABLED
+    // Flash writes (disk saves) happen on core 0 through flash_safe_execute(),
+    // which parks this core via the SIO FIFO IRQ while the erase/program runs.
+    multicore_lockout_victim_init();
+#endif
     MII_DEBUG_PRINTF("Core 1: Waiting for emulator ready...\n");
     
     // Wait for Core 0 to finish initialization
@@ -551,6 +616,9 @@ static bool __not_in_flash_func() timer_callback(repeating_timer_t *rt) {
 #endif
 
 int main() {
+#ifdef BOARD_TUFTY
+    tufty_board_early_init();   // POWER_EN first: keeps the badge alive on battery
+#endif
     // Overclock support: For speeds > 252 MHz, increase voltage first
 #if CPU_CLOCK_MHZ > 252
     vreg_disable_voltage_limit();
@@ -932,6 +1000,9 @@ int main() {
         
         process_keyboard();
         process_serial_keyboard();
+#ifdef BOARD_TUFTY
+        tufty_buttons_poll();
+#endif
 #if NETCARD_ENABLED
         netcard_poll();
 #endif

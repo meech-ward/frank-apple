@@ -1,0 +1,9 @@
+; ST7789 8-bit 8080 parallel writer (from pimoroni/tufty2350 st7789_parallel.pio).
+; One byte per two PIO cycles: data on the 8 out pins, WR strobed by side-set.
+.program par_lcd
+.side_set 1
+
+.wrap_target
+    out pins, 8  side 0
+    nop          side 1
+.wrap

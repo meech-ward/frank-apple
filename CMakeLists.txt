@@ -22,12 +22,12 @@ set(BUILD_VERSION "RC24")
 set(PICO_BOARD pico2 CACHE STRING "Board type")
 
 # Board configuration variant (M1, M2, P2W)
-set(BOARD_VARIANT "M1" CACHE STRING "Board variant: M1, M2 or P2W")
+set(BOARD_VARIANT "M1" CACHE STRING "Board variant: M1, M2, P2W or TUFTY")
 
 # CPU overclock configuration (252, 378, 504 MHz)
 set(CPU_SPEED "378" CACHE STRING "CPU clock in MHz: 252, 378, 504")
 
-set(VIDEO_TYPE "VGA" CACHE STRING "Video output: HDMI, VGA or SPI")
+set(VIDEO_TYPE "VGA" CACHE STRING "Video output: HDMI, VGA, SPI or PAR (8-bit parallel ST7789, Tufty 2350)")
 
 if(VIDEO_TYPE STREQUAL "HDMI")
     set(VIDEO_HDMI ON)
@@ -35,6 +35,10 @@ elseif(VIDEO_TYPE STREQUAL "VGA")
     set(VIDEO_VGA ON)
 elseif(VIDEO_TYPE STREQUAL "SPI")
     set(VIDEO_SPI ON)
+elseif(VIDEO_TYPE STREQUAL "PAR")
+    # Same framebuffer contract as the SPI panel driver; only the bus differs.
+    set(VIDEO_SPI ON)
+    set(VIDEO_PAR ON)
 endif()
 
 # Audio output configuration (I2S, PWM or PWME)
@@ -62,6 +66,9 @@ if(BOARD_VARIANT STREQUAL "M1")
 elseif(BOARD_VARIANT STREQUAL "P2W")
     set(I2S_DATA_PIN "6")
     set(I2S_CLOCK_PIN_BASE "7")
+elseif(BOARD_VARIANT STREQUAL "TUFTY")
+    set(I2S_DATA_PIN "16")   # no speaker on the badge; unrouted GPIOs
+    set(I2S_CLOCK_PIN_BASE "17")
 else()  # M2
     set(I2S_DATA_PIN "9")
     set(I2S_CLOCK_PIN_BASE "10")
@@ -106,6 +113,8 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${OUTPUT_DIR}")
 
 IF(BOARD_VARIANT STREQUAL "P2W")
     SET(BUILD_NAME "p2w-${BUILD_NAME}")
+ELSEIF(BOARD_VARIANT STREQUAL "TUFTY")
+    SET(BUILD_NAME "tufty-${BUILD_NAME}")
 ELSEIF(BOARD_VARIANT STREQUAL "M2")
     if (PICO_BOARD STREQUAL "pico")
         SET(BUILD_NAME "m2p1-${BUILD_NAME}")
@@ -126,16 +135,16 @@ endif ()
 IF(VIDEO_HDMI)
     SET(BUILD_NAME "${BUILD_NAME}-HDMI")
 endif ()
-IF(VIDEO_SPI)
+IF(VIDEO_PAR)
+    SET(BUILD_NAME "${BUILD_NAME}-PAR")
+ELSEIF(VIDEO_SPI)
     SET(BUILD_NAME "${BUILD_NAME}-SPI")
 endif ()
 
 SET(BUILD_NAME "${BUILD_NAME}-${CPU_SPEED}MHz")
 
-if (PICO_BOARD STREQUAL "pico2")
-    if (PSRAM_SPEED)
-        SET(BUILD_NAME "${BUILD_NAME}-P${PSRAM_SPEED}")
-    endif ()
+if (PSRAM_SPEED)
+    SET(BUILD_NAME "${BUILD_NAME}-P${PSRAM_SPEED}")
 endif ()
 
 SET(BUILD_NAME "${BUILD_NAME}-${AUDIO_TYPE}-${BUILD_VERSION}")
@@ -155,7 +164,14 @@ endif()
 # Copy driver subdirectories from murmdoom structure
 add_subdirectory(drivers/ps2kbd)
 add_subdirectory(drivers/fatfs)
-add_subdirectory(drivers/sdcard)
+if(BOARD_VARIANT STREQUAL "TUFTY")
+    # No card slot: FatFs drive 0 lives in a region of the 16 MB flash.
+    add_subdirectory(drivers/flashdisk)
+    set(STORAGE_LIB flashdisk)
+else()
+    add_subdirectory(drivers/sdcard)
+    set(STORAGE_LIB sdcard)
+endif()
 if(USB_HID_ENABLED)
     add_subdirectory(drivers/usbhid)
 endif()
@@ -178,12 +194,17 @@ if (VIDEO_VGA)
     list(APPEND DRIVER_SOURCES drivers/vga.c)
 endif()
 
-if (VIDEO_SPI)
+if (VIDEO_PAR)
+    list(APPEND DRIVER_SOURCES drivers/par_lcd.c)
+elseif (VIDEO_SPI)
     list(APPEND DRIVER_SOURCES drivers/spi_lcd.c)
 endif()
 
 # Create a library for drivers
 add_library(drivers ${DRIVER_SOURCES})
+if (VIDEO_PAR)
+    pico_generate_pio_header(drivers ${CMAKE_CURRENT_LIST_DIR}/drivers/par_lcd.pio)
+endif()
 
 target_include_directories(drivers PUBLIC drivers drivers/nespad src)
 target_compile_definitions(drivers PRIVATE
@@ -265,12 +286,10 @@ target_compile_definitions(${BUILD_NAME} PRIVATE
     PICO_AUDIO_I2S_CLOCK_PIN_BASE=${I2S_CLOCK_PIN_BASE}
 )
 
-if (PICO_BOARD STREQUAL "pico2")
-    if (PSRAM_SPEED)
-        target_compile_definitions(${BUILD_NAME} PRIVATE
-            PSRAM_MAX_FREQ_MHZ=${PSRAM_SPEED}
-        )
-    endif()
+if (PSRAM_SPEED)
+    target_compile_definitions(${BUILD_NAME} PRIVATE
+        PSRAM_MAX_FREQ_MHZ=${PSRAM_SPEED}
+    )
 endif()
 
 # Audio configuration based on AUDIO_TYPE
@@ -317,6 +336,10 @@ if (VIDEO_SPI)
         VIDEO=SPI
     )
 endif()
+if (VIDEO_PAR)
+    target_compile_definitions(${BUILD_NAME} PRIVATE VIDEO_PAR)
+    target_compile_definitions(drivers PRIVATE VIDEO_PAR)
+endif()
 
 if(PS2_KEYBOARD_ENABLED)
     target_compile_definitions(${BUILD_NAME} PRIVATE ENABLE_PS2_KEYBOARD=1)
@@ -354,7 +377,7 @@ target_link_libraries(${BUILD_NAME}
     hardware_spi
     drivers
     ps2kbd
-    sdcard
+    ${STORAGE_LIB}
     fatfs
 )
 
@@ -370,7 +393,11 @@ if(USB_HID_ENABLED)
 else()
     pico_enable_stdio_usb(${BUILD_NAME} 1)
 endif()
-pico_enable_stdio_uart(${BUILD_NAME} 1)
+if(BOARD_VARIANT STREQUAL "TUFTY")
+    pico_enable_stdio_uart(${BUILD_NAME} 0)   # no UART pins on the badge
+else()
+    pico_enable_stdio_uart(${BUILD_NAME} 1)
+endif()
 
 if(NETCARD_ENABLED)
     target_sources(${BUILD_NAME} PRIVATE src/mii_netcard.c)
