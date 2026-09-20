@@ -17,6 +17,7 @@
 #include "mii_dd.h"
 #include "debug_log.h"
 #include "disk_loader.h"
+#include "board_config.h"
 #include "../drivers/psram_allocator.h"
 
 #if PICO_RP2350
@@ -126,6 +127,14 @@ mii_dd_file_load(
 			mii_dd_files[flags].size = (PRODOS_MAX_BLOCKS * PRODOS_BLOCK_SIZE); // W/A ~32 MB
 		}
 	} else {
+#if FLASHDISK_ENABLED
+		// Flash-resident FAT volume (Tufty 2350, 12 MB): never create and pre-size a
+		// 32 MB SmartPort image here. On 2026-09-20 that seek-to-expand allocated every
+		// free cluster and left the Disk II working copies with no space. No file = no
+		// image in this drive.
+		printf("%s: %s not found, SmartPort drive %u left empty\n", __func__, pathname, (unsigned)flags);
+		return 0;
+#endif
 		mii_dd_files[flags].read_only = false;
 		mii_dd_files[flags].size = (PRODOS_MAX_BLOCKS * PRODOS_BLOCK_SIZE); // W/A ~32 MB
 		f_open(f, pathname, FA_WRITE | FA_OPEN_ALWAYS);

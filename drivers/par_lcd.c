@@ -62,10 +62,11 @@
 #define ST7789_GMCTRP1 0xE0
 #define ST7789_GMCTRN1 0xE1
 
-// MADCTL for 320x240 landscape: MX|MV|ML (same value as spi_lcd.c).
-// NOTE: if the picture comes up mirrored or rotated on hardware, this byte
-// is the knob (adjust the MX/MV/ML bits here).
-#define ST7789_MADCTL_LANDSCAPE 0x70
+// MADCTL for 320x240 landscape. spi_lcd.c uses 0x70 (MX|MV|ML) on the Display
+// Pack; on the Tufty 2350 that came up upside down (verified 2026-09-20), so
+// both mirror bits are flipped: MY|MV|ML = 0xB0 (Pimoroni's ROTATE_180).
+// This byte is the orientation knob.
+#define ST7789_MADCTL_LANDSCAPE 0xB0
 
 // Bounded TE wait so a missing/unwired tearing-effect line never hangs.
 #define LCD_TE_TIMEOUT_US 25000u
