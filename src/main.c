@@ -920,6 +920,14 @@ int main() {
 #if defined(PICO_RP2350) || (defined(RAM_PAGES_PER_POOL) && defined(MAX_PAGES_PER_POOL) && (RAM_PAGES_PER_POOL == MAX_PAGES_PER_POOL))
     MII_DEBUG_PRINTF("Starting video rendering on core 1...\n");
     multicore_launch_core1(core1_main);
+#if FLASHDISK_ENABLED
+    // Flash writes take the direct (no-lockout) path until core 1 has registered as a
+    // lockout victim; wait for that so no write can run while core 1 executes from XIP.
+    for (int i = 0; i < 2000 && !multicore_lockout_victim_is_initialized(1); i++) {
+        sleep_us(100);
+    }
+    MII_DEBUG_PRINTF("Core 1 flash lockout victim: %s\n", multicore_lockout_victim_is_initialized(1) ? "ready" : "NOT ready");
+#endif
     MII_DEBUG_PRINTF("Core 1 launched\n");
 #endif
     
