@@ -406,6 +406,48 @@ static bool bdsk_exists = false;
 static bool bdsk_recreate = false;
 #define has_parent_dir  (strcmp(selected_dir, "/") != 0)
 
+size_t disk_ui_describe(char *out, size_t cap) {
+    if (!cap) return 0;
+    size_t used = 0;
+    out[0] = 0;
+#define MENU_TEXT(...) do { \
+    if (used < cap - 1) { \
+        int written = snprintf(out + used, cap - used, __VA_ARGS__); \
+        if (written > 0) used += (size_t)written < cap - used ? (size_t)written : cap - used - 1; \
+    } \
+} while (0)
+    if (ui_state == DISK_UI_SELECT_DRIVE) {
+        MENU_TEXT("CHOOSE A DISK DRIVE\n\n");
+        for (int i = 0; i < 2; ++i)
+            MENU_TEXT("%c DRIVE %d\n  %.36s\n\n", i == selected_drive ? '>' : ' ', i + 1,
+                g_loaded_disks[i].loaded ? g_loaded_disks[i].filename : "(empty)");
+        MENU_TEXT("UP/DOWN: choose   RETURN: open\nESCAPE: back to the Apple\n");
+#if NETCARD_WEB_CONTROL
+        MENU_TEXT("\nSPACE toggles web control here.\n");
+#endif
+    } else if (ui_state == DISK_UI_SELECT_FILE) {
+        MENU_TEXT("CHOOSE A DISK FOR DRIVE %d\n%.39s\n\n", selected_drive + 1, selected_dir);
+        int base = has_parent_dir ? 1 : 0;
+        int total = g_disk_count + base;
+        for (int i = scroll_offset; i < total && i < scroll_offset + 16; ++i) {
+            const char *name = base && i == 0 ? ".. (parent folder)" : g_disk_list[i - base].filename;
+            MENU_TEXT("%c %.37s\n", i == selected_file ? '>' : ' ', name);
+        }
+        MENU_TEXT("\nUP/DOWN: choose   RETURN: select\nESCAPE: back\n");
+    } else if (ui_state == DISK_UI_SELECT_ACTION) {
+        int index = selected_file - (has_parent_dir ? 1 : 0);
+        MENU_TEXT("DISK ACTION\n%.39s\n\n", index >= 0 && index < g_disk_count ? g_disk_list[index].filename : "(no disk)");
+        MENU_TEXT("Read-only: %s (SPACE changes this)\n\n", read_only ? "ON" : "OFF");
+        const char *actions[] = {"Boot - start this disk", "Insert - keep current program", "Cancel"};
+        for (int i = 0; i < 3; ++i) MENU_TEXT("%c %s\n", i == selected_action ? '>' : ' ', actions[i]);
+        MENU_TEXT("\nBoot replaces the program in memory.\nUP/DOWN: choose   RETURN: do action\nESCAPE: back\n");
+    } else if (ui_state == DISK_UI_LOADING) {
+        MENU_TEXT("LOADING DISK...\nPlease wait.\n");
+    }
+#undef MENU_TEXT
+    return used;
+}
+
 static bool disk_ui_delete_selected_file(void)
 {
     if (ui_state != DISK_UI_SELECT_FILE)

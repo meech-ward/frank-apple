@@ -9,6 +9,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include "pico/mutex.h"
 
 // Serializes menu RAM reuse and framebuffer writes with the video core.
@@ -53,6 +54,9 @@ void disk_ui_render(uint8_t *framebuffer, int width, int height);
 
 // Check if UI is visible
 bool disk_ui_is_visible(void);
+
+// Bounded text equivalent of the menu for the web controller (core 0 only).
+size_t disk_ui_describe(char *out, size_t cap);
 
 // Check if UI needs redraw
 bool disk_ui_needs_redraw(void);

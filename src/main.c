@@ -338,16 +338,15 @@ size_t remote_control_screen(char *out, size_t cap) {
     if (cap < 985) return 0;
     size_t n = 0;
     if (disk_ui_is_visible()) {
-        const char *msg = "DISK MENU OPEN - use the badge display and arrow buttons.\n";
-        size_t len = strlen(msg);
-        memcpy(out, msg, len + 1);
-        return len;
+        return disk_ui_describe(out, cap);
     }
+    const bool graphics = remote_control_graphics();
+    const bool mixed = SWW_GETSTATE(g_mii.sw_state, SWMIXED);
     uint16_t base = SWW_GETSTATE(g_mii.sw_state, SWPAGE2) ? 0x800 : 0x400;
     for (int row = 0; row < 24; ++row) {
         uint16_t addr = base + (row & 7) * 0x80 + (row / 8) * 0x28;
         for (int col = 0; col < 40; ++col) {
-            if (remote_control_graphics() && row < 20) { out[n++] = ' '; continue; }
+            if (graphics && (!mixed || row < 20)) { out[n++] = ' '; continue; }
             uint8_t ch = mii_read_one(&g_mii, addr + col) & 0x7f;
             if (ch < 0x20) ch += 0x40;
             out[n++] = ch == 0x7f ? ' ' : (char)ch;
