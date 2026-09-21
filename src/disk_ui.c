@@ -520,9 +520,11 @@ static void handle_disk_loaded(void) {
             )
         ) {
             printf("Disk UI: disk mounted successfully\n");
-            disk_autoboot_save(selected_drive);
             
             if (selected_action == 0) {  // BOOT
+                // Remember the startup disk, not an application's later
+                // program/data-disk swap, which may not be bootable.
+                disk_autoboot_save(selected_drive);
                 printf("Disk UI: resetting CPU for disk boot\n");
                 mii_reset(g_mii, true);
                 

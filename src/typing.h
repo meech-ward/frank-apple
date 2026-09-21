@@ -12,9 +12,14 @@
 void typing_push(const uint8_t *s, size_t n);
 /* All-or-nothing text enqueue, with LF/case mapping. Core 0 only. */
 bool typing_try_push(const uint8_t *s, size_t n);
+/* Literal text for word processors; preserves case. */
+bool typing_try_literal(const uint8_t *s, size_t n);
+/* Queue one key with Open Apple held until the key has been consumed. */
+bool typing_try_apple(uint8_t key);
 size_t typing_pending(void);
 /* Named remote key / menu actions, called outside lwIP callbacks on core 0. */
 void remote_control_key(uint8_t key);
-size_t remote_control_screen(char *out, size_t cap);
+size_t remote_control_screen(char *out, char *inverse, size_t cap);
 bool remote_control_graphics(void);
 bool remote_control_basic_prompt(void);
+unsigned remote_control_columns(void);

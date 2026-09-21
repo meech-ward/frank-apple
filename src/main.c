@@ -237,31 +237,31 @@ static uint32_t key_hold_frames = 0;  // Frames since key was first pressed
 // Serial console keyboard bridge (development aid): characters arriving on
 // stdio (USB CDC now, UART0 once the USB port becomes a keyboard host) are fed
 // to the emulated keyboard, one per frame so the single-byte latch is never
-// overrun. Ctrl-\ (0x1C) prints the 40-column text page as 24 lines so the
+// overrun. Ctrl-\ (0x1C) prints the 40/80-column text page as 24 lines so the
 // screen can be read back over the same link. Lowercase is folded to upper,
 // as a IIe with caps lock on.
 static void serial_dump_text_page(void) {
+    printf("CPU PC=$%04X SW=$%08lX\n", g_mii.cpu.PC, (unsigned long)g_mii.sw_state);
+    static char text[1945];
+    remote_control_screen(text, NULL, sizeof(text));
     printf("---- text page ----\n");
-    for (int row = 0; row < 24; row++) {
-        uint16_t line_addr = 0x400 + (row & 7) * 0x80 + (row / 8) * 0x28;
-        char line[41];
-        for (int col = 0; col < 40; col++) {
-            uint8_t b = mii_read_one(&g_mii, line_addr + col);
-            uint8_t ch = b & 0x7F;
-            if (ch < 0x20) ch += 0x40;
-            line[col] = (char)ch;
-        }
-        line[40] = 0;
-        printf("|%s|\n", line);
+    for (char *p = text; *p;) {
+        char *end = strchr(p, '\n');
+        if (end) *end = 0;
+        printf("|%s|\n", p);
+        if (!end) break;
+        p = end + 1;
     }
     printf("-------------------\n");
 }
 
 #define TYPING_SIZE 1024
-static uint8_t typing_buf[TYPING_SIZE];
+static uint16_t typing_buf[TYPING_SIZE];
 static uint32_t typing_head;
 static uint32_t typing_len;
 static uint64_t typing_resume_at;
+static bool typing_open_apple;
+static unsigned typing_apple_grace;
 
 static void typing_push_raw(const uint8_t *s, size_t n) {
     size_t i;
@@ -298,16 +298,33 @@ bool typing_try_push(const uint8_t *s, size_t n) {
     return true;
 }
 
+bool typing_try_literal(const uint8_t *s, size_t n) {
+    if (n > TYPING_SIZE - typing_len) return false;
+    for (size_t i = 0; i < n; ++i) {
+        uint8_t c = s[i] == '\n' ? '\r' : s[i];
+        typing_push_raw(&c, 1);
+    }
+    return true;
+}
+
+bool typing_try_apple(uint8_t key) {
+    if (disk_ui_is_visible() || typing_len >= TYPING_SIZE) return false;
+    typing_buf[(typing_head + typing_len++) % TYPING_SIZE] = typing_map(key) | 0x100;
+    return true;
+}
+
 size_t typing_pending(void) { return typing_len; }
 
 void remote_control_key(uint8_t key) {
     if (key == 0x1D) {
         typing_len = 0;
+        typing_open_apple = false;
         disk_ui_toggle();
     } else if (disk_ui_is_visible()) {
         disk_ui_handle_key(key);
     } else if (key == 3) {
         typing_len = 0;
+        typing_open_apple = false;
         typing_resume_at = 0;
         mii_keypress(&g_mii, 3); // Stop takes priority over a pasted program.
     } else {
@@ -334,20 +351,30 @@ bool remote_control_basic_prompt(void) {
     return (mii_read_one(&g_mii, addr) & 0x7f) == ']';
 }
 
-size_t remote_control_screen(char *out, size_t cap) {
-    if (cap < 985) return 0;
+unsigned remote_control_columns(void) {
+    return !disk_ui_is_visible() && SWW_GETSTATE(g_mii.sw_state, SW80COL) ? 80 : 40;
+}
+
+size_t remote_control_screen(char *out, char *inverse, size_t cap) {
+    const unsigned columns = remote_control_columns();
+    if (cap < (columns + 1) * 24 + 1) return 0;
     size_t n = 0;
+    if (inverse) memset(inverse, '0', (columns + 1) * 24);
     if (disk_ui_is_visible()) {
         return disk_ui_describe(out, cap);
     }
     const bool graphics = remote_control_graphics();
     const bool mixed = SWW_GETSTATE(g_mii.sw_state, SWMIXED);
-    uint16_t base = SWW_GETSTATE(g_mii.sw_state, SWPAGE2) ? 0x800 : 0x400;
+    const bool page2 = !SWW_GETSTATE(g_mii.sw_state, SW80STORE) && SWW_GETSTATE(g_mii.sw_state, SWPAGE2);
+    uint16_t base = page2 ? 0x800 : 0x400;
     for (int row = 0; row < 24; ++row) {
         uint16_t addr = base + (row & 7) * 0x80 + (row / 8) * 0x28;
-        for (int col = 0; col < 40; ++col) {
+        for (unsigned col = 0; col < columns; ++col) {
             if (graphics && (!mixed || row < 20)) { out[n++] = ' '; continue; }
-            uint8_t ch = mii_read_one(&g_mii, addr + col) & 0x7f;
+            mii_bank_t *bank = &g_mii.bank[columns == 80 && !(col & 1) ? MII_BANK_AUX_BASE : MII_BANK_MAIN];
+            uint8_t raw = mii_bank_peek(bank, addr + (columns == 80 ? col / 2 : col));
+            if (inverse) inverse[n] = raw < 0x40 || (SWW_GETSTATE(g_mii.sw_state, SWALTCHARSET) && raw >= 0x60 && raw < 0x80) ? '1' : '0';
+            uint8_t ch = raw & 0x7f;
             if (ch < 0x20) ch += 0x40;
             out[n++] = ch == 0x7f ? ' ' : (char)ch;
         }
@@ -360,13 +387,21 @@ size_t remote_control_screen(char *out, size_t cap) {
 // Drain one byte per frame into the emulated keyboard.
 static void typing_drain_one(void) {
     uint8_t c;
+    if (typing_open_apple) {
+        if (disk_ui_is_visible()) typing_open_apple = false;
+        else if (mii_bank_peek(&g_mii.bank[MII_BANK_SW], SWAKD) & 0x80) return;
+        else if (typing_apple_grace++ < 2) return;
+        else typing_open_apple = false;
+    }
     if (typing_len == 0)
         return;
     if (disk_ui_is_visible() || time_us_64() < typing_resume_at)
         return;
     if (mii_bank_peek(&g_mii.bank[MII_BANK_SW], SWAKD) & 0x80)
         return; // The Apple must consume the current key before we replace it.
-    c = typing_buf[typing_head];
+    typing_open_apple = !!(typing_buf[typing_head] & 0x100);
+    typing_apple_grace = 0;
+    c = (uint8_t)typing_buf[typing_head];
     typing_head = (typing_head + 1) % TYPING_SIZE;
     typing_len--;
     mii_keypress(&g_mii, c);
@@ -1228,7 +1263,7 @@ int main() {
 #ifdef USB_HID_ENABLED
             mods |= usbhid_wrapper_get_modifiers();
 #endif
-            uint8_t btn0 = (combined_gamepad_state & DPAD_A) ? 0x80 : 0x00;
+            uint8_t btn0 = ((combined_gamepad_state & DPAD_A) || typing_open_apple) ? 0x80 : 0x00;
             uint8_t btn1 = (combined_gamepad_state & DPAD_B) ? 0x80 : 0x00;
             uint8_t btn2 = (combined_gamepad_state & DPAD_START) ? 0x80 : 0x00;
             mii_bank_poke(sw, 0xc061, btn0);

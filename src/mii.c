@@ -957,6 +957,10 @@ mii_mem_access(
 		return;
 	
 #ifdef MII_RP2350
+	// The embedded port omits the desktop bank-access callbacks. Preserve
+	// the IIe C3-to-C8 internal ROM latch explicitly on CPU accesses.
+	if ((addr & 0xff00) == 0xc300)
+		_mii_select_c3introm(NULL, mii, addr, d, wr);
 	// Fast path: check address range first to minimize function calls
 	// Slot I/O: $C090-$C0FF - most frequent during disk access
 	if (addr >= 0xc090 && addr <= 0xc0ff) {
@@ -1235,9 +1239,9 @@ _mii_cpu_direct_access_cb(
 	}
 #endif
 	
-	// Fast path for non-I/O memory (RAM < $C000 or ROM $C100-$FFFF)
-	// Only $C000-$C0FF is I/O that needs special handling
-	if (likely(page != 0xC0)) {
+	// Ordinary RAM/ROM uses the fast path. C0 soft switches, the C3
+	// internal-ROM latch and its CFFF release must use the bus handlers.
+	if (likely(page != 0xC0 && page != 0xC3 && addr != 0xCFFF)) {
 		if (access.w) {
 			// Write
 			uint8_t m = mii->mem[page].write;

@@ -55,8 +55,10 @@ mii_cpu_init(
 /* Forward declare timer run */
 extern void mii_timer_run(mii_t *mii, uint64_t cycles);
 
-/* Check if address is in I/O range ($C000-$C0FF) */
-#define _IS_IO_ADDR(_a) (((_a) & 0xFF00) == 0xC000)
+/* C3 ROM accesses latch the IIe's internal C8 ROM; CFFF releases it.
+ * These ROM reads have side effects just like the C0 soft switches. */
+#define _IS_IO_ADDR(_a) (((_a) & 0xFF00) == 0xC000 || \
+                       ((_a) & 0xFF00) == 0xC300 || (_a) == 0xCFFF)
 
 /* 
  * Run timers - only called on I/O access now.
@@ -107,7 +109,7 @@ _run_timers_inline(mii_cpu_t *cpu) {
 			uint8_t _page = _a >> 8; \
 			uint8_t _m = _mii->mem[_page].write; \
 			mii_bank_t *_b = &_mii->bank[_m]; \
-			mii_bank_poke(_b, _a, s.data); \
+			if (likely(!_b->ro)) mii_bank_poke(_b, _a, s.data); \
 		} else { \
 			_run_timers_inline(cpu); \
 			s = cpu->access(cpu, s); \

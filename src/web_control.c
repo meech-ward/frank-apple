@@ -21,7 +21,7 @@
 
 #define CLIENTS 4
 #define REQUEST_CAP 1536
-#define BODY_CAP 2200
+#define BODY_CAP 6400
 #define INPUT_CAP 512
 
 typedef struct {
@@ -40,7 +40,8 @@ static web_client_t clients[CLIENTS];
 static struct tcp_pcb *listener;
 static bool enabled;
 static uint8_t pending_key;
-static char screen_text[985];
+static char screen_text[1945];
+static char screen_inverse[1945];
 
 static err_t release_client(web_client_t *c, bool abort_now) {
     struct tcp_pcb *pcb = c->pcb;
@@ -102,17 +103,19 @@ static void state_reply(web_client_t *c) {
     rt = netcard_realtime_state();
 #endif
     size_t n = (size_t)snprintf(c->body, sizeof(c->body),
-        "{\"queued\":%u,\"menu\":%s,\"graphics\":%s,\"realtime\":%d,\"basic_prompt\":%s,\"screen\":\"",
+        "{\"queued\":%u,\"menu\":%s,\"graphics\":%s,\"realtime\":%d,\"basic_prompt\":%s,\"columns\":%u,\"screen\":\"",
         (unsigned)typing_pending(), disk_ui_is_visible() ? "true" : "false",
         remote_control_graphics() ? "true" : "false", rt,
-        remote_control_basic_prompt() ? "true" : "false");
-    size_t len = remote_control_screen(screen_text, sizeof(screen_text));
+        remote_control_basic_prompt() ? "true" : "false", remote_control_columns());
+    size_t len = remote_control_screen(screen_text, screen_inverse, sizeof(screen_text));
     for (size_t i = 0; i < len && n + 8 < sizeof(c->body); ++i) {
         unsigned char ch = (unsigned char)screen_text[i];
         if (ch == '\n') { c->body[n++] = '\\'; c->body[n++] = 'n'; }
         else if (ch == '"' || ch == '\\') { c->body[n++] = '\\'; c->body[n++] = ch; }
         else c->body[n++] = ch;
     }
+    memcpy(c->body+n, "\",\"inverse\":\"", 13); n += 13;
+    memcpy(c->body+n, screen_inverse, len); n += len;
     c->body[n++] = '"'; c->body[n++] = '}'; c->body[n] = 0;
     respond(c, 200, "OK", "application/json", (const unsigned char *)c->body, n);
 }
@@ -178,7 +181,7 @@ static void parse_request(web_client_t *c) {
     if(strcmp(method,"POST")) { message(c,405,"Method Not Allowed","Use GET or POST"); return; }
     if(!control) { message(c,403,"Forbidden","X-Apple2-Control: 1 required"); return; }
     if(!have_length) { message(c,411,"Length Required","Content-Length required"); return; }
-    if(!strcmp(path,"/type")) {
+    if(!strcmp(path,"/type") || !strcmp(path,"/text")) {
         if(disk_ui_is_visible()) { message(c,409,"Conflict","Close the disk menu before typing BASIC"); return; }
         for(size_t i=0;i<length;++i) {
             unsigned char ch=(unsigned char)body[i];
@@ -187,10 +190,19 @@ static void parse_request(web_client_t *c) {
             }
         }
         if(!length) { message(c,400,"Bad Request","Empty input"); return; }
-        if(!typing_try_push((const uint8_t *)body,length)) {
+        bool queued = !strcmp(path,"/text") ? typing_try_literal((const uint8_t *)body,length) : typing_try_push((const uint8_t *)body,length);
+        if(!queued) {
             message(c,429,"Too Many Requests","Typing queue full; wait before retrying"); return;
         }
         MII_DEBUG_PRINTF("web: queued %u text bytes\n",(unsigned)length);
+        message(c,202,"Accepted","Queued");
+    } else if(!strcmp(path,"/apple")) {
+        if(length != 1 || (unsigned char)body[0] < 32 || (unsigned char)body[0] > 126) {
+            message(c,400,"Bad Request","Send one printable Open Apple shortcut key"); return;
+        }
+        if(!typing_try_apple((uint8_t)body[0])) {
+            message(c,409,"Conflict","Close the disk menu and wait for the typing queue"); return;
+        }
         message(c,202,"Accepted","Queued");
     } else if(!strcmp(path,"/key")) {
         uint8_t key=key_code(body,length);
