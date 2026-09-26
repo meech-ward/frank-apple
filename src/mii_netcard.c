@@ -1,387 +1,216 @@
-/*
- * mii_netcard.c - Virtual WiFi network card in slot 1.
- *
- * Register map (slot 1 = $C090 + reg, reg = addr & 0x0F):
- *   reg  read                                          write
- *   0    link: 0 = no wifi, 1 = wifi up                any value: start fetch if
- *                                                      not FETCHING (clears buffer)
- *   1    state: 0 IDLE, 1 FETCHING, 2 READY, 3 ERROR    ignored
- *   2    next body byte, or 0 when exhausted            any value: rewind read
- *        or not READY; auto-advances                   pointer to 0
- *   3    bytes remaining, low byte                     ignored
- *   4    bytes remaining, high byte                    ignored
- *   5    realtime state with NETCARD_REALTIME:           ignored
- *        0 DOWN/BACKOFF, 1 RESOLVING..JOINING, 2 JOINED
- *        (0 without NETCARD_REALTIME)
- *   6-15 0                                             ignored
- *
- * Body handling: LF (0x0A) is returned as CR (0x0D), every byte masked
- * with 0x7F. One static 4096-byte buffer; overflow is dropped.
- *
- * Fetch engine: a small hand-rolled HTTP/1.1 GET over lwIP's altcp API,
- * which covers both plain TCP and TLS (mbedTLS) behind one interface.
- * With NETCARD_TLS the pcb is a TLS client. With NETCARD_TLS_VERIFY
- * the client is created with the bundled CA roots and verification is
- * REQUIRED; without it the client is created with no CA and
- * verification is OPTIONAL (the lwIP default authmode). SNI is set
- * from NETCARD_HOST. NETCARD_HOST may be a hostname (DNS) or a
- * dotted IP. When NETCARD_API_KEY is non-empty the request carries
- * the key in apikey and Authorization header lines. A new fetch while
- * one is in flight is ignored, as before.
- *
- * Boot is async: netcard_init() starts the WiFi join and returns at
- * once; a link monitor in netcard_poll() (every 500 ms) tracks
- * CYW43_LINK_UP and retries the join while the link stays down.
- * A fetch in flight when the link drops is torn down to ERROR.
- *
- * Poll mode: every lwIP callback runs inside cyw43_arch_poll() on
- * core 0. No locking. A TLS handshake stalls the emulator for a second
- * or two; that is accepted.
+/* Virtual slot-1 WiFi card. Original registers and URL GET API stay compatible.
+ * Extension revision 2 (read reg 15): reg 13 selects GET/POST/PUT/PATCH/DELETE,
+ * reg 14 appends header bytes, reg 15 appends body bytes. Reset clears all input.
+ * Wi-Fi comes only from /wifi.ini. No built-in cloud account or credentials.
  */
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-
 #include "mii.h"
 #include "mii_slot.h"
 #include "debug_log.h"
 #include "netcard.h"
+#include "net_http.h"
 #if NETCARD_WEB_CONTROL
 #include "web_control.h"
 #endif
-
-#include "netcard_config.h"
-
+#include "wifi_config.h"
 #include "pico/cyw43_arch.h"
 #include "pico/time.h"
 #include "lwip/altcp.h"
 #include "lwip/altcp_tcp.h"
-#if NETCARD_TLS
-#include "lwip/altcp_tls.h"
-#endif
 #include "lwip/dns.h"
 #include "lwip/pbuf.h"
 #include "lwip/netif.h"
 #include "lwip/ip4_addr.h"
 #if NETCARD_TLS
+#include "lwip/altcp_tls.h"
 #include "mbedtls/ssl.h"
 #endif
 #ifdef NETCARD_TLS_VERIFY
 #include "netcard_ca.h"
 #endif
 
-enum {
-    NC_IDLE = 0,
-    NC_FETCHING = 1,
-    NC_READY = 2,
-    NC_ERROR = 3,
-};
-
-#define NC_BODY_SIZE 4096
-#define NC_RAW_SIZE  (NC_BODY_SIZE + 1024)
-#define NC_REQ_SIZE  1024
-/* altcp_poll interval is 10 x 500 ms = 5 s; give up after 6 quiet polls. */
-#define NC_POLL_INTERVAL 10
-#define NC_POLL_LIMIT    6
-
-typedef struct {
-    uint8_t link;      /* 0 = no wifi, 1 = wifi up */
-    uint8_t state;     /* NC_* */
-    uint8_t body[NC_BODY_SIZE];
-    uint32_t len;      /* valid bytes in body */
-    uint32_t pos;      /* next byte to return for reg 2 */
-    bool init_ok;      /* cyw43_arch_init() succeeded */
-    struct altcp_pcb *pcb;
-    uint8_t raw[NC_RAW_SIZE]; /* headers plus body; overflow is dropped */
-    uint32_t raw_len;  /* valid bytes in raw */
-    uint8_t quiet_polls; /* polls with no progress */
-} netcard_state_t;
-
-static netcard_state_t s_nc;
-static char s_req[NC_REQ_SIZE];
-#if NETCARD_TLS
-static struct altcp_tls_config *s_tls_cfg;
-#endif
-
-/* Link monitor: the status register is read at most every 500 ms;
- * while the link stays down a rejoin is attempted 5 s after the drop
- * and allows each association/DHCP attempt 30 s. Never blocks, never sleeps. */
+enum { NC_IDLE, NC_FETCHING, NC_READY, NC_ERROR };
+#define NC_REQ_SIZE NH_REQUEST_MAX
+#define NC_TIMEOUT_US (30u * 1000u * 1000u)
 #define NC_LINK_CHECK_US (500u * 1000u)
 #define NC_LINK_RETRY_FIRST_US (5u * 1000u * 1000u)
 #define NC_LINK_JOIN_TIMEOUT_US (30u * 1000u * 1000u)
 
-static uint32_t s_link_check_last;
-static uint32_t s_reconnect_at;
-
-/* Detach callbacks, then free the pcb. close_ok selects close vs abort. */
-static void
-nc_pcb_teardown(bool close_ok)
-{
-    struct altcp_pcb *pcb = s_nc.pcb;
-    s_nc.pcb = NULL;
-    if (pcb == NULL)
-        return;
-    altcp_arg(pcb, NULL);
-    altcp_recv(pcb, NULL);
-    altcp_err(pcb, NULL);
-    altcp_poll(pcb, NULL, 0);
-    if (close_ok) {
-        if (altcp_close(pcb) != ERR_OK)
-            altcp_abort(pcb);
-    } else {
-        altcp_abort(pcb);
-    }
-}
-
-static void
-nc_fail(void)
-{
-    nc_pcb_teardown(false);
-    s_nc.state = NC_ERROR;
-}
-
-/* Expect "HTTP/1.x NNN"; return NNN or -1. */
-static int
-nc_status_code(void)
-{
-    if (s_nc.raw_len < 13)
-        return -1;
-    if (memcmp(s_nc.raw, "HTTP/1.", 7) != 0)
-        return -1;
-    /* "HTTP/1.x NNN": minor digit at 7, space at 8, code at 9..11. */
-    if (s_nc.raw[8] != ' ')
-        return -1;
-    for (int i = 9; i < 12; i++) {
-        if (s_nc.raw[i] < '0' || s_nc.raw[i] > '9')
-            return -1;
-    }
-    return (s_nc.raw[9] - '0') * 100 +
-           (s_nc.raw[10] - '0') * 10 +
-           (s_nc.raw[11] - '0');
-}
-
-/* Offset just past the "\r\n\r\n" header end, or -1 when absent. */
-static int
-nc_header_end(void)
-{
-    uint32_t i;
-    for (i = 0; i + 4 <= s_nc.raw_len; i++) {
-        if (s_nc.raw[i] == '\r' && s_nc.raw[i + 1] == '\n' &&
-            s_nc.raw[i + 2] == '\r' && s_nc.raw[i + 3] == '\n')
-            return (int)(i + 4);
-    }
-    return -1;
-}
-
-/* Peer closed: parse what arrived and settle READY vs ERROR. */
-static void
-nc_finish(void)
-{
-    int code = nc_status_code();
-    int hdr = nc_header_end();
-    nc_pcb_teardown(true);
-    s_nc.len = 0;
-    s_nc.pos = 0;
-    if (code == 200 && hdr >= 0) {
-        uint32_t n = s_nc.raw_len - (uint32_t)hdr;
-        if (n > NC_BODY_SIZE)
-            n = NC_BODY_SIZE;
-        memcpy(s_nc.body, s_nc.raw + hdr, n);
-        s_nc.len = n;
-        s_nc.state = NC_READY;
-    } else {
-        s_nc.state = NC_ERROR;
-        MII_DEBUG_PRINTF("netcard: fetch failed status=%d\n", code);
-    }
-}
-
-static err_t
-nc_recv_cb(void *arg, struct altcp_pcb *pcb, struct pbuf *p, err_t err)
-{
-    (void)arg;
-    (void)err;
-    if (p == NULL) {
-        /* Peer closed the connection: finish. */
-        nc_finish();
-        return ERR_OK;
-    }
-    s_nc.quiet_polls = 0;
-    uint32_t room = (s_nc.raw_len < NC_RAW_SIZE) ?
-        (NC_RAW_SIZE - s_nc.raw_len) : 0;
-    uint32_t n = p->tot_len;
-    if (n > room)
-        n = room;
-    if (n > 0) {
-        pbuf_copy_partial(p, s_nc.raw + s_nc.raw_len, (u16_t)n, 0);
-        s_nc.raw_len += n;
-    }
-    altcp_recved(pcb, p->tot_len);
-    pbuf_free(p);
-    return ERR_OK;
-}
-
-static void
-nc_err_cb(void *arg, err_t err)
-{
-    (void)arg;
-    /* The pcb is already freed by lwIP; just drop the pointer. */
-    s_nc.pcb = NULL;
-    if (s_nc.state == NC_FETCHING) {
-        s_nc.state = NC_ERROR;
-        MII_DEBUG_PRINTF("netcard: connection error %d\n", (int)err);
-    }
-}
-
-static err_t
-nc_poll_cb(void *arg, struct altcp_pcb *pcb)
-{
-    (void)arg;
-    (void)pcb;
-    if (s_nc.state != NC_FETCHING)
-        return ERR_OK;
-    if (++s_nc.quiet_polls >= NC_POLL_LIMIT) {
-        MII_DEBUG_PRINTF("netcard: fetch timed out\n");
-        nc_fail();
-        return ERR_ABRT;
-    }
-    return ERR_OK;
-}
-
-static err_t
-nc_connected_cb(void *arg, struct altcp_pcb *pcb, err_t err)
-{
-    (void)arg;
-    if (err != ERR_OK) {
-        MII_DEBUG_PRINTF("netcard: connect failed %d\n", (int)err);
-        nc_fail();
-        return ERR_ABRT;
-    }
-    int len;
-    if (NETCARD_API_KEY[0] != '\0') {
-        len = snprintf(s_req, sizeof(s_req),
-            "GET %s HTTP/1.1\r\n"
-            "Host: %s\r\n"
-            "User-Agent: frank-apple\r\n"
-            "Accept: %s\r\n"
-            "Connection: close\r\n"
-            "apikey: %s\r\n"
-            "Authorization: Bearer %s\r\n"
-            "\r\n",
-            NETCARD_PATH, NETCARD_HOST, NETCARD_ACCEPT,
-            NETCARD_API_KEY, NETCARD_API_KEY);
-    } else {
-        len = snprintf(s_req, sizeof(s_req),
-            "GET %s HTTP/1.1\r\n"
-            "Host: %s\r\n"
-            "User-Agent: frank-apple\r\n"
-            "Accept: %s\r\n"
-            "Connection: close\r\n"
-            "\r\n",
-            NETCARD_PATH, NETCARD_HOST, NETCARD_ACCEPT);
-    }
-    if (len < 0 || len >= (int)sizeof(s_req)) {
-        MII_DEBUG_PRINTF("netcard: request too long\n");
-        nc_fail();
-        return ERR_ABRT;
-    }
-    s_nc.quiet_polls = 0;
-    if (altcp_write(pcb, s_req, (u16_t)len, TCP_WRITE_FLAG_COPY) != ERR_OK) {
-        MII_DEBUG_PRINTF("netcard: request write failed\n");
-        nc_fail();
-        return ERR_ABRT;
-    }
-    altcp_output(pcb);
-    return ERR_OK;
-}
-
-static void
-nc_connect(const ip_addr_t *ip)
-{
+typedef struct {
+    uint8_t link, state, error, redirects;
+    bool init_ok, legacy, follow, url_overflow, headers_overflow, body_overflow;
+    uint8_t method;
+    uint16_t url_len, headers_len, body_len;
+    uint32_t pos, deadline;
+    uintptr_t generation;
+    struct altcp_pcb *pcb;
+    char url_text[NH_URL_MAX + 1];
+    char headers[NH_REQUEST_HEADERS_MAX + 1];
+    uint8_t body[NH_REQUEST_BODY_MAX];
+    nh_url url;
+    nh_response response;
+} netcard_state_t;
+static netcard_state_t s_nc;
+static char s_req[NC_REQ_SIZE];
+static wifi_config s_wifi;
+static enum wifi_config_status s_wifi_status;
+static int s_link_status;
+static uint32_t s_link_check_last, s_reconnect_at;
 #if NETCARD_TLS
-    if (s_tls_cfg == NULL) {
+static struct altcp_tls_config *s_tls_cfg;
+static struct altcp_tls_config *nc_tls_config(void) {
+    if (!s_tls_cfg) {
 #ifdef NETCARD_TLS_VERIFY
-        /* Bundled CA roots: verification is REQUIRED. */
-        s_tls_cfg = altcp_tls_create_config_client(
-                netcard_ca_pem, NETCARD_CA_PEM_LEN);
+        s_tls_cfg = altcp_tls_create_config_client(netcard_ca_pem, NETCARD_CA_PEM_LEN);
 #else
-        /* No CA: verification is OPTIONAL, the lwIP default authmode. */
         s_tls_cfg = altcp_tls_create_config_client(NULL, 0);
 #endif
-        if (s_tls_cfg == NULL) {
-            MII_DEBUG_PRINTF("netcard: tls config failed\n");
-            s_nc.state = NC_ERROR;
-            return;
-        }
     }
-    s_nc.pcb = altcp_tls_new(s_tls_cfg, IPADDR_TYPE_ANY);
-#else
-    s_nc.pcb = altcp_tcp_new_ip_type(IPADDR_TYPE_ANY);
-#endif
-    if (s_nc.pcb == NULL) {
-        MII_DEBUG_PRINTF("netcard: pcb alloc failed\n");
-        s_nc.state = NC_ERROR;
-        return;
-    }
-#if NETCARD_TLS
-    {
-        void *tls = altcp_tls_context(s_nc.pcb);
-        if (tls != NULL)
-            (void)mbedtls_ssl_set_hostname(
-                (mbedtls_ssl_context *)tls, NETCARD_HOST);
-    }
-#endif
-    altcp_arg(s_nc.pcb, NULL);
-    altcp_recv(s_nc.pcb, nc_recv_cb);
-    altcp_err(s_nc.pcb, nc_err_cb);
-    altcp_poll(s_nc.pcb, nc_poll_cb, NC_POLL_INTERVAL);
-    if (altcp_connect(s_nc.pcb, ip, NETCARD_PORT,
-            nc_connected_cb) != ERR_OK) {
-        MII_DEBUG_PRINTF("netcard: connect start failed\n");
-        nc_fail();
-    }
+    return s_tls_cfg;
 }
+#endif
 
-static void
-nc_dns_cb(const char *name, const ip_addr_t *ipaddr, void *arg)
-{
-    (void)name;
-    (void)arg;
-    if (s_nc.state != NC_FETCHING)
-        return;
-    if (ipaddr == NULL) {
-        MII_DEBUG_PRINTF("netcard: dns failed\n");
-        s_nc.state = NC_ERROR;
-        return;
-    }
-    nc_connect(ipaddr);
-}
-
-static void
-nc_start_fetch(void)
-{
-    if (s_nc.state == NC_FETCHING)
-        return;
-    if (!s_nc.link) {
-        s_nc.state = NC_ERROR;
-        return;
-    }
-    s_nc.len = 0;
-    s_nc.pos = 0;
-    s_nc.raw_len = 0;
-    s_nc.quiet_polls = 0;
+/* Return true if a callback must return ERR_ABRT. */
+static bool nc_pcb_teardown(bool close_ok) {
+    struct altcp_pcb *pcb = s_nc.pcb;
     s_nc.pcb = NULL;
-    s_nc.state = NC_FETCHING;
-    ip_addr_t ip;
-    err_t e = dns_gethostbyname(NETCARD_HOST, &ip, nc_dns_cb, NULL);
-    if (e == ERR_OK) {
-        /* Numeric host or cached address: connect at once. */
-        nc_connect(&ip);
-    } else if (e != ERR_INPROGRESS) {
-        s_nc.state = NC_ERROR;
-        MII_DEBUG_PRINTF("netcard: dns lookup failed %d\n", (int)e);
+    if (!pcb) return false;
+    altcp_arg(pcb, NULL); altcp_recv(pcb, NULL); altcp_err(pcb, NULL); altcp_poll(pcb, NULL, 0);
+    if (close_ok && altcp_close(pcb) == ERR_OK) return false;
+    altcp_abort(pcb); return true;
+}
+static void nc_fail(uint8_t error) {
+    nc_pcb_teardown(false);
+    ++s_nc.generation; /* invalidate any outstanding DNS callback */
+    s_nc.follow = false; s_nc.error = error; s_nc.state = NC_ERROR; s_nc.pos = 0;
+    MII_DEBUG_PRINTF("netcard: HTTP error=%u http=%u\n", error, s_nc.response.status);
+}
+static bool nc_current(void *arg) { return (uintptr_t)arg == s_nc.generation && s_nc.state == NC_FETCHING; }
+
+static err_t nc_complete(void) {
+    bool aborted = nc_pcb_teardown(true);
+    if (s_nc.response.redirect_headers_only && nh_is_redirect(s_nc.response.status) && s_nc.response.location[0]) {
+        if (s_nc.redirects == 3) nc_fail(NH_REDIRECT);
+        else s_nc.follow = true; /* resolve/connect outside the lwIP callback */
+    } else if (s_nc.legacy && s_nc.response.status != 200) nc_fail(NH_HTTP_STATUS);
+    else {
+        s_nc.pos = 0; s_nc.error = NH_OK; s_nc.state = NC_READY;
+        MII_DEBUG_PRINTF("netcard: HTTP ready http=%u bytes=%u\n", s_nc.response.status, (unsigned)s_nc.response.size);
     }
-    /* ERR_INPROGRESS: nc_dns_cb continues the fetch. */
+    return aborted ? ERR_ABRT : ERR_OK;
+}
+static err_t nc_recv_cb(void *arg, struct altcp_pcb *pcb, struct pbuf *p, err_t err) {
+    if (!nc_current(arg) || pcb != s_nc.pcb) { if (p) pbuf_free(p); return ERR_OK; }
+    if (err != ERR_OK) { if (p) pbuf_free(p); nc_fail(NH_CONNECT); return ERR_ABRT; }
+    if (!p) nh_eof(&s_nc.response);
+    else {
+        for (struct pbuf *q = p; q; q = q->next) nh_feed(&s_nc.response, q->payload, q->len);
+        altcp_recved(pcb, p->tot_len); pbuf_free(p);
+    }
+    if (s_nc.response.phase == NH_FAILED) { nc_fail(s_nc.response.error); return ERR_ABRT; }
+    if (s_nc.response.phase == NH_DONE) return nc_complete();
+    return ERR_OK;
+}
+static void nc_err_cb(void *arg, err_t err) {
+    (void)err;
+    if (!nc_current(arg)) return;
+    s_nc.pcb = NULL; /* lwIP already freed it */
+    nc_fail(s_nc.url.tls ? NH_TLS : NH_CONNECT);
+}
+static err_t nc_connected_cb(void *arg, struct altcp_pcb *pcb, err_t err) {
+    if (!nc_current(arg) || pcb != s_nc.pcb) return ERR_OK;
+    if (err != ERR_OK) { nc_fail(s_nc.url.tls ? NH_TLS : NH_CONNECT); return ERR_ABRT; }
+    MII_DEBUG_PRINTF("netcard: HTTP connected (%s), sending request\n", s_nc.url.tls ? "TLS" : "TCP");
+    int len = nh_request(s_req, sizeof(s_req), &s_nc.url,
+        s_nc.legacy ? NH_GET : s_nc.method, s_nc.legacy ? "" : s_nc.headers,
+        s_nc.body, s_nc.legacy ? 0 : s_nc.body_len);
+    if (len < 0) { nc_fail((uint8_t)-len); return ERR_ABRT; }
+    if (altcp_write(pcb, s_req, (u16_t)len, TCP_WRITE_FLAG_COPY) != ERR_OK) {
+        nc_fail(NH_CONNECT); return ERR_ABRT;
+    }
+    altcp_output(pcb); return ERR_OK;
+}
+static void nc_connect(const ip_addr_t *ip) {
+    MII_DEBUG_PRINTF("netcard: HTTP connecting (%s)\n", s_nc.url.tls ? "TLS" : "TCP");
+    if (s_nc.url.tls) {
+#if NETCARD_TLS && NETCARD_TLS_VERIFY
+        struct altcp_tls_config *cfg = nc_tls_config();
+        if (!cfg) { nc_fail(NH_TLS); return; }
+        s_nc.pcb = altcp_tls_new(cfg, IPADDR_TYPE_V4);
+#else
+        nc_fail(NH_UNSUPPORTED); return;
+#endif
+    } else s_nc.pcb = altcp_tcp_new_ip_type(IPADDR_TYPE_V4);
+    if (!s_nc.pcb) { nc_fail(NH_CONNECT); return; }
+#if NETCARD_TLS
+    if (s_nc.url.tls) {
+        mbedtls_ssl_context *tls = altcp_tls_context(s_nc.pcb);
+        if (!tls || mbedtls_ssl_set_hostname(tls, s_nc.url.host)) { nc_fail(NH_TLS); return; }
+    }
+#endif
+    altcp_arg(s_nc.pcb, (void *)s_nc.generation);
+    altcp_recv(s_nc.pcb, nc_recv_cb); altcp_err(s_nc.pcb, nc_err_cb);
+    /* Install the TLS layer's lower poll callback even without an app callback:
+     * it retries buffered output/receive data after transient packet shortages. */
+    altcp_poll(s_nc.pcb, NULL, 2);
+    if (altcp_connect(s_nc.pcb, ip, s_nc.url.port, nc_connected_cb) != ERR_OK) nc_fail(NH_CONNECT);
+}
+static void nc_dns_cb(const char *name, const ip_addr_t *ip, void *arg) {
+    (void)name;
+    if (!nc_current(arg)) return;
+    if (!ip) nc_fail(NH_DNS); else nc_connect(ip);
+}
+static void nc_resolve(void) {
+    ++s_nc.generation;
+    MII_DEBUG_PRINTF("netcard: HTTP resolving, redirect=%u\n", s_nc.redirects);
+    ip_addr_t ip;
+    err_t e = dns_gethostbyname_addrtype(s_nc.url.host, &ip, nc_dns_cb,
+        (void *)s_nc.generation, LWIP_DNS_ADDRTYPE_IPV4);
+    if (e == ERR_OK) nc_connect(&ip);
+    else if (e != ERR_INPROGRESS) nc_fail(NH_DNS);
+}
+static void nc_start_fetch(bool legacy) {
+    if (s_nc.state == NC_FETCHING) return;
+    nh_init(&s_nc.response); s_nc.pos = 0; s_nc.error = NH_OK;
+    s_nc.legacy = legacy; s_nc.redirects = 0; s_nc.follow = false;
+    if (!s_nc.link) { nc_fail(NH_WIFI); return; }
+    int e;
+    if (legacy) e = nh_parse_url("https://httpbin.org/uuid", &s_nc.url);
+    else if (s_nc.url_overflow) e = NH_URL_LONG;
+    else if (s_nc.headers_overflow || s_nc.body_overflow) e = NH_TOO_LARGE;
+    else e = nh_parse_url(s_nc.url_text, &s_nc.url);
+    if (e) { nc_fail(e); return; }
+    /* Validate all staged bytes before opening a socket. Only plain GETs are
+     * automatically redirected. Writes and authenticated/custom-header GETs
+     * return 3xx as-is, avoiding accidental replay or credential forwarding. */
+    int len = nh_request(s_req, sizeof(s_req), &s_nc.url,
+        legacy ? NH_GET : s_nc.method, legacy ? "" : s_nc.headers,
+        s_nc.body, legacy ? 0 : s_nc.body_len);
+    if (len < 0) { nc_fail((uint8_t)-len); return; }
+    s_nc.response.redirect_headers_only = legacy || (s_nc.method == NH_GET && !s_nc.headers_len);
+    s_nc.state = NC_FETCHING; s_nc.deadline = time_us_32() + NC_TIMEOUT_US;
+    nc_resolve();
+}
+static void nc_command(uint8_t cmd) {
+    if (cmd == 0) {
+        nc_pcb_teardown(false); ++s_nc.generation;
+        s_nc.follow = false; s_nc.state = NC_IDLE; s_nc.error = NH_OK;
+        s_nc.url_len = 0; s_nc.url_text[0] = 0; s_nc.url_overflow = false; s_nc.pos = 0;
+        s_nc.method = NH_GET; s_nc.headers_len = s_nc.body_len = 0;
+        s_nc.headers_overflow = s_nc.body_overflow = false;
+        memset(s_nc.headers, 0, sizeof(s_nc.headers));
+        memset(s_nc.body, 0, sizeof(s_nc.body));
+        memset(s_req, 0, sizeof(s_req));
+        nh_init(&s_nc.response);
+    } else if (cmd == 1) nc_start_fetch(false);
+    else if (cmd == 2 && s_nc.state == NC_FETCHING) nc_fail(NH_CANCELLED);
+}
+
+void netcard_cancel(void) {
+    if (s_nc.state == NC_FETCHING) nc_fail(NH_CANCELLED);
 }
 
 /* Link monitor, called from netcard_poll(). Reads the link status at
@@ -397,6 +226,7 @@ nc_link_poll(uint32_t now)
         return;
     s_link_check_last = now;
     st = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
+    s_link_status = st;
     static int last_status = 99;
     if (st != last_status) {
         MII_DEBUG_PRINTF("netcard: link status=%d\n", st);
@@ -419,13 +249,13 @@ nc_link_poll(uint32_t now)
         s_reconnect_at = now + NC_LINK_RETRY_FIRST_US;
         if (s_nc.state == NC_FETCHING) {
             MII_DEBUG_PRINTF("netcard: fetch aborted, link down\n");
-            nc_fail();
+            nc_fail(NH_WIFI);
         }
     } else if ((int32_t)(now - s_reconnect_at) >= 0) {
         s_reconnect_at = now + NC_LINK_JOIN_TIMEOUT_US;
         MII_DEBUG_PRINTF("netcard: wifi retry status=%d\n", st);
-        cyw43_arch_wifi_connect_async(WIFI_SSID, WIFI_PASS,
-                CYW43_AUTH_WPA2_AES_PSK);
+        cyw43_arch_wifi_connect_async(s_wifi.ssid, s_wifi.password,
+                s_wifi.password[0] ? CYW43_AUTH_WPA2_AES_PSK : CYW43_AUTH_OPEN);
     }
 }
 
@@ -438,6 +268,11 @@ netcard_init(void)
     s_nc.link = 0;
     s_link_check_last = 0;
     s_reconnect_at = time_us_32() + NC_LINK_JOIN_TIMEOUT_US;
+    s_wifi_status = wifi_config_load(&s_wifi);
+    if (s_wifi_status != WIFI_CONFIG_READY) {
+        MII_DEBUG_PRINTF("netcard: WiFi disabled, wifi.ini status=%d\n", s_wifi_status);
+        return;
+    }
     int r = cyw43_arch_init();
     if (r != 0) {
         MII_DEBUG_PRINTF("netcard: cyw43 init failed %d\n", r);
@@ -448,32 +283,21 @@ netcard_init(void)
     s_nc.init_ok = true;
     cyw43_arch_enable_sta_mode();
     /* Async join: the emulator starts at once, no 15 s block. */
-    r = cyw43_arch_wifi_connect_async(WIFI_SSID, WIFI_PASS,
-            CYW43_AUTH_WPA2_AES_PSK);
+    r = cyw43_arch_wifi_connect_async(s_wifi.ssid, s_wifi.password,
+            s_wifi.password[0] ? CYW43_AUTH_WPA2_AES_PSK : CYW43_AUTH_OPEN);
     MII_DEBUG_PRINTF("netcard: join requested rc=%d\n", r);
 }
 
-#if NETCARD_REALTIME
-struct altcp_tls_config *
-netcard_tls_config(void)
-{
-    if (s_tls_cfg == NULL) {
-#ifdef NETCARD_TLS_VERIFY
-        s_tls_cfg = altcp_tls_create_config_client(
-                netcard_ca_pem, NETCARD_CA_PEM_LEN);
-#else
-        s_tls_cfg = altcp_tls_create_config_client(NULL, 0);
-#endif
-    }
-    return s_tls_cfg;
+const char *netcard_wifi_status(void) {
+    if (s_wifi_status == WIFI_CONFIG_MISSING) return "WiFi off: add /wifi.ini";
+    if (s_wifi_status == WIFI_CONFIG_INVALID) return "WiFi off: invalid /wifi.ini";
+    if (s_wifi_status == WIFI_CONFIG_IO) return "WiFi off: cannot read /wifi.ini";
+    if (!s_nc.init_ok) return "WiFi radio unavailable";
+    if (s_nc.link) return NULL;
+    if (s_link_status == CYW43_LINK_BADAUTH) return "WiFi password rejected; retrying";
+    if (s_link_status == CYW43_LINK_NONET) return "WiFi network not found; retrying";
+    return "Connecting to WiFi...";
 }
-
-bool
-netcard_link_up(void)
-{
-    return s_nc.link != 0;
-}
-#endif
 
 void
 netcard_poll(void)
@@ -481,10 +305,19 @@ netcard_poll(void)
     if (!s_nc.init_ok)
         return;
     cyw43_arch_poll();
-    nc_link_poll(time_us_32());
-#if NETCARD_REALTIME
-    netcard_realtime_poll();
-#endif
+    uint32_t now = time_us_32();
+    nc_link_poll(now);
+    if (s_nc.state == NC_FETCHING && (int32_t)(now - s_nc.deadline) >= 0) nc_fail(NH_TIMEOUT);
+    if (s_nc.state == NC_FETCHING && s_nc.follow) {
+        /* URL resolution supports in-place output; keep large URL structs off
+         * the RP2350's small stack. This runs outside TLS/lwIP callbacks. */
+        int e = nh_resolve(&s_nc.url, s_nc.response.location, &s_nc.url);
+        if (e) nc_fail(e);
+        else {
+            ++s_nc.redirects; s_nc.follow = false;
+            nh_init(&s_nc.response); nc_resolve();
+        }
+    }
 #if NETCARD_WEB_CONTROL
     web_control_poll();
 #endif
@@ -499,9 +332,27 @@ _netcard_access(mii_t *mii, struct mii_slot_t *slot,
     uint8_t reg = (uint8_t)(addr & 0x0F);
     if (write) {
         if (reg == 0)
-            nc_start_fetch();
+            nc_start_fetch(true);
         else if (reg == 2)
             s_nc.pos = 0;
+        else if (reg == 6) nc_command(byte);
+        else if (reg == 7 && s_nc.state != NC_FETCHING) {
+            if (!byte || s_nc.url_len == NH_URL_MAX) s_nc.url_overflow = true;
+            else {
+                s_nc.url_text[s_nc.url_len++] = (char)byte;
+                s_nc.url_text[s_nc.url_len] = 0;
+            }
+        } else if (reg == 13 && s_nc.state != NC_FETCHING) s_nc.method = byte;
+        else if (reg == 14 && s_nc.state != NC_FETCHING) {
+            if (!byte || s_nc.headers_len == NH_REQUEST_HEADERS_MAX) s_nc.headers_overflow = true;
+            else {
+                s_nc.headers[s_nc.headers_len++] = (char)byte;
+                s_nc.headers[s_nc.headers_len] = 0;
+            }
+        } else if (reg == 15 && s_nc.state != NC_FETCHING) {
+            if (s_nc.body_len == NH_REQUEST_BODY_MAX) s_nc.body_overflow = true;
+            else s_nc.body[s_nc.body_len++] = byte;
+        }
         return 0;
     }
     switch (reg) {
@@ -512,31 +363,37 @@ _netcard_access(mii_t *mii, struct mii_slot_t *slot,
         case 2: {
             if (s_nc.state != NC_READY)
                 return 0;
-            if (s_nc.pos >= s_nc.len)
+            if (s_nc.pos >= s_nc.response.size)
                 return 0;
-            uint8_t b = s_nc.body[s_nc.pos++];
+            uint8_t b = s_nc.response.body[s_nc.pos++];
             if (b == 0x0A)
                 b = 0x0D;
             return (uint8_t)(b & 0x7F);
         }
         case 3: {
             uint32_t rem = 0;
-            if (s_nc.state == NC_READY && s_nc.len > s_nc.pos)
-                rem = s_nc.len - s_nc.pos;
+            if (s_nc.state == NC_READY && s_nc.response.size > s_nc.pos)
+                rem = s_nc.response.size - s_nc.pos;
             return (uint8_t)(rem & 0xFF);
         }
         case 4: {
             uint32_t rem = 0;
-            if (s_nc.state == NC_READY && s_nc.len > s_nc.pos)
-                rem = s_nc.len - s_nc.pos;
+            if (s_nc.state == NC_READY && s_nc.response.size > s_nc.pos)
+                rem = s_nc.response.size - s_nc.pos;
             return (uint8_t)((rem >> 8) & 0xFF);
         }
-        case 5:
-#if NETCARD_REALTIME
-            return (uint8_t)netcard_realtime_state();
-#else
-            return 0;
-#endif
+        case 5: return 0; /* Former cloud-keyboard status, retained for old programs. */
+        case 6: return 1;
+        case 7:
+            return s_nc.state == NC_READY && s_nc.pos < s_nc.response.size ? s_nc.response.body[s_nc.pos++] : 0;
+        case 8: return s_nc.response.status & 0xff;
+        case 9: return s_nc.response.status >> 8;
+        case 10: return s_nc.error;
+        case 11: return s_nc.url_len & 0xff;
+        case 12: return s_nc.url_len >> 8;
+        case 13: return s_nc.method;
+        case 14: return 0;
+        case 15: return 2; /* HTTP extension revision; base API still reports 1. */
         default:
             return 0;
     }

@@ -1,0 +1,49 @@
+name: Source checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Check HTTP, Wi-Fi, emulation, and browser guide
+        run: |
+          python3 tools/check-net-http.py
+          python3 tools/check-netcard.py
+          python3 tools/check-wifi-config.py
+          python3 tools/check-video-mixed.py
+          python3 tools/check-cpu-bus.py
+          node tools/check-guide.mjs
+
+  firmware:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        board: [pico, tufty]
+        usb: [console, keyboard]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib
+      - name: Fetch Pico SDK 2.2.0
+        run: |
+          git clone --branch 2.2.0 --depth 1 --recurse-submodules https://github.com/raspberrypi/pico-sdk.git "$RUNNER_TEMP/pico-sdk"
+          test "$(git -C "$RUNNER_TEMP/pico-sdk" rev-parse HEAD)" = a1438dff1d38bd9c65dbd693f0e5db4b9ae91779
+          echo "PICO_SDK_PATH=$RUNNER_TEMP/pico-sdk" >> "$GITHUB_ENV"
+      - name: Build firmware
+        run: python3 tools/build-public-firmware.py --board ${{ matrix.board }} --usb ${{ matrix.usb }} --jobs 4

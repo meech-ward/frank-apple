@@ -323,6 +323,9 @@ void remote_control_key(uint8_t key) {
     } else if (disk_ui_is_visible()) {
         disk_ui_handle_key(key);
     } else if (key == 3) {
+#if NETCARD_ENABLED
+        netcard_cancel();
+#endif
         typing_len = 0;
         typing_open_apple = false;
         typing_resume_at = 0;
@@ -411,7 +414,10 @@ static void typing_drain_one(void) {
 static void process_serial_keyboard(void) {
     int c = getchar_timeout_us(0);
     uint8_t b;
-    if (c < 0)
+    // A UART break can yield NUL (for example when a probe is disconnected).
+    // It is not a typing command: feeding it to GETLN makes BASIC treat the
+    // following visible command as an empty line.
+    if (c <= 0)
         return;
     if (c == 3 && !disk_ui_is_visible()) {
         remote_control_key(3);
@@ -766,7 +772,13 @@ int main() {
     }
 #endif
 
-    // Initialize stdio (USB serial)
+    // UART RX must idle high even with no debug probe attached. RP2350 pads
+    // default to pull-down; enabling UART on that low input receives a break
+    // and queues a phantom NUL before the first real keyboard command.
+#if LIB_PICO_STDIO_UART && defined(PICO_DEFAULT_UART_RX_PIN)
+    gpio_pull_up(PICO_DEFAULT_UART_RX_PIN);
+#endif
+    // Initialize the configured USB/UART stdio drivers.
     stdio_init_all();
     
 #ifdef PICO_DEFAULT_LED_PIN

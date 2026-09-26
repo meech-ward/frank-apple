@@ -99,9 +99,6 @@ static void message(web_client_t *c, int code, const char *reason, const char *m
 
 static void state_reply(web_client_t *c) {
     int rt = 0;
-#if NETCARD_REALTIME
-    rt = netcard_realtime_state();
-#endif
     size_t n = (size_t)snprintf(c->body, sizeof(c->body),
         "{\"queued\":%u,\"menu\":%s,\"graphics\":%s,\"realtime\":%d,\"basic_prompt\":%s,\"columns\":%u,\"screen\":\"",
         (unsigned)typing_pending(), disk_ui_is_visible() ? "true" : "false",
@@ -255,7 +252,9 @@ static err_t accepted(void *arg,struct tcp_pcb *pcb,err_t err) {
 
 bool web_control_enabled(void) { return enabled; }
 void web_control_address(char *out,size_t cap) {
-    if(!netif_default || ip4_addr_isany_val(*netif_ip4_addr(netif_default))) snprintf(out,cap,"Waiting for WiFi...");
+    const char *status = netcard_wifi_status();
+    if(status) snprintf(out,cap,"%s",status);
+    else if(!netif_default || ip4_addr_isany_val(*netif_ip4_addr(netif_default))) snprintf(out,cap,"Waiting for WiFi...");
     else snprintf(out,cap,"http://%s/",ip4addr_ntoa(netif_ip4_addr(netif_default)));
 }
 void web_control_toggle(void) {

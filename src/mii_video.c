@@ -1601,13 +1601,18 @@ mii_video_render_text40_mixed_rp2350(
 	int flash = (video->frame_count & 0x10) ? -0x40 : 0x40;
 	
 	// In mixed mode, only render the bottom 4 text rows (rows 20-23)
-	// These correspond to Apple II lines 160-191
+	// Hires uses 192 lines with a 24-pixel border. Lores fills all 240
+	// framebuffer lines, so its text rows need the same 8-to-10 scaling.
+	bool lores = !SWW_GETSTATE(sw, SWHIRES);
+	int row_height = lores ? 10 : 8;
+	int y_offset = lores ? 0 : 24;
 	for (int row = 20; row < 24; row++) {
 		uint16_t line_addr = base_addr + (row & 7) * 0x80 + (row / 8) * 0x28;
 		mii_bank_read(main_bank, line_addr, main_row, 40);
 
-        for (int cy = 0; cy < 8; ++cy) {
-            int fb_y = 24 + row * 8 + cy;
+        for (int dy = 0; dy < row_height; ++dy) {
+            int cy = dy * 8 / row_height;
+            int fb_y = y_offset + row * row_height + dy;
             if (fb_y >= 240)
                 continue;
 
@@ -2099,14 +2104,12 @@ mii_video_scale_to_hdmi(
 		} else {
 			mii_video_render_hires_rp2350(mii, hdmi_buffer, 320);
 		}
-		if (mixed) {
-			// Mixed mode: render bottom 4 text lines (lines 160-191)
-			// This overlays text on top of the HGR screen
-			mii_video_render_text40_mixed_rp2350(mii, hdmi_buffer, 320);
-		}
 	} else {
 		// Lo-res graphics mode
 		mii_video_render_lores_rp2350(mii, hdmi_buffer, 320);
+	}
+	if (!text_mode && mixed) {
+		mii_video_render_text40_mixed_rp2350(mii, hdmi_buffer, 320);
 	}
 	
 	// Draw floppy activity indicator in bottom border

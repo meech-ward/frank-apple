@@ -4,11 +4,7 @@
 
 void netcard_init(void);
 void netcard_poll(void);
+void netcard_cancel(void);
 
-#if NETCARD_REALTIME
-struct altcp_tls_config;
-struct altcp_tls_config *netcard_tls_config(void);
-bool netcard_link_up(void);
-void netcard_realtime_poll(void);
-int netcard_realtime_state(void);
-#endif
+// Human-readable Wi-Fi setup/connection state for the disk menu.
+const char *netcard_wifi_status(void);
