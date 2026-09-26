@@ -4,6 +4,7 @@
 # The image gets one folder, /apple, holding every file from <dir>. Flash it at
 # 0x10000000 + FLASHDISK_OFFSET (0x10400000): see docs/INSTALL.md.
 set -euo pipefail
+shopt -s nullglob
 OUT=${1:?out.img}; MIB=${2:?size MiB}; SRC=${3:?dir with disk images}
 MNT=$(mktemp -d /tmp/mkfat.XXXXXX)
 rm -f "$OUT"

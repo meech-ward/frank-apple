@@ -11,13 +11,13 @@ These are firmware-only updates, not complete images of your saved disks.
 
 1. With power off, put your SD card in a computer. Use a FAT16/FAT32 card and
    create an `apple` folder at its root.
-2. Copy your own Apple II disk images into that folder. Start with a bootable
-   DOS 3.3 disk to use Applesoft BASIC and disk saves. The browser guide expects
-   names listed in [DISKS.md](DISKS.md), but the disk menu accepts other names.
+2. Leave `apple` empty, or copy your own disk images into it. You can add disks
+   later in the browser using **Add software**. A bootable DOS disk adds CATALOG,
+   SAVE and LOAD; ROM BASIC itself does not require a disk.
 3. Optionally place `wifi.ini` beside `apple`, following [WIFI-SETUP.md](WIFI-SETUP.md).
 4. Eject the card and return it to the Pico. Hold BOOTSEL while connecting a
    USB data cable, then copy the Pico-specific `.uf2` to its bootloader drive.
-5. After booting, select and boot your disk from the menu. It is remembered
+5. Open Web control and add software, or select a disk already on the card. A disk you boot is remembered
    for the next startup. With keyboard firmware, connect the powered OTG
    keyboard after flashing.
 
@@ -39,7 +39,22 @@ bootloader drive. This updates the first 4 MiB and preserves the data volume.
 An existing Apple II volume continues to work. A freshly wiped badge also needs
 a 12 MiB FAT16 volume at flash offset 4 MiB; firmware alone does not create it.
 
-On macOS, build a data image from a directory containing your own disk images:
+For a fresh local install with an empty data volume, use:
+
+```sh
+python3 tools/package-clean.py --board tufty --firmware build-public-tufty/tufty-frank_apple-PAR-252MHz-P84-PWM-RC24.elf --out /path/to/new-package --wifi /path/to/private/wifi.ini
+```
+
+The Wi-Fi argument is optional. Copy `fresh-install.uf2` to the bootloader drive.
+**This is a fresh install: it replaces existing disk storage.** It bundles no
+application disks or DOS. Open Web control and use **Add software** afterwards.
+The `firmware-only.uf2` in the same package preserves existing disks.
+
+A Pico package uses `--board pico` with its matching firmware and has an empty
+`apple` folder for the SD card. Put your private `wifi.ini` beside that folder.
+
+As an alternative on macOS, build a data image from an empty directory (or a
+private directory of your own disk images):
 
 ```sh
 bash tools/mkfatimg.sh apple-data.img 12 /path/to/my-disks /path/to/wifi.ini
@@ -52,9 +67,9 @@ wanted. Copy `apple-data.uf2` onto the badge's bootloader drive, entering
 BOOT + RESET again if the firmware upload already restarted it.
 
 **Replacing this data image replaces existing saved programs.** Back up first.
-For an existing badge, prefer a firmware-only update. There is no USB file
-manager in this build; changing internal Wi-Fi settings requires updating the
-data volume. The SD-card workflow on Pico is simpler.
+For an existing badge, prefer a firmware-only update. The browser library adds disks without replacing the volume. There is no USB
+file manager; changing internal Wi-Fi settings still requires updating the
+data volume.
 
 ## BASIC examples and browser guide
 

@@ -23,6 +23,9 @@ jobs:
           python3 tools/check-video-mixed.py
           python3 tools/check-cpu-bus.py
           node tools/check-guide.mjs
+          python3 tools/check-disk-library.py
+          python3 tools/check-web-upload.py
+          python3 tools/check-clean-package.py
 
   firmware:
     runs-on: ubuntu-24.04

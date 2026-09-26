@@ -1,11 +1,12 @@
 /* Small, bounded HTTP controller. No sockets/threads: lwIP and the emulator use core 0.
- * Four clients, one request per connection, 512-byte input limit, 10s idle timeout.
+ * Four clients, one request per connection, 512-byte commands / 1 KiB upload chunks, 10s idle timeout.
  * Physical/session opt-in; same-origin custom-header POSTs prevent ordinary cross-site forms.
- * Intended for trusted LANs, not exposed Internet service. No filesystem or firmware endpoints.
+ * Intended for trusted LANs, not exposed Internet service. Disk imports use bounded chunks and a separate staging file; no firmware endpoint.
  */
 #include "web_control.h"
 #include "typing.h"
 #include "disk_ui.h"
+#include "disk_library.h"
 #include "netcard.h"
 #include "debug_log.h"
 #include "pico/time.h"
@@ -20,7 +21,7 @@
 #include "web_page.h"
 
 #define CLIENTS 4
-#define REQUEST_CAP 1536
+#define REQUEST_CAP (1024 + LIBRARY_CHUNK + 8)
 #define BODY_CAP 6400
 #define INPUT_CAP 512
 
@@ -42,6 +43,26 @@ static bool enabled;
 static uint8_t pending_key;
 static char screen_text[1945];
 static char screen_inverse[1945];
+static struct {
+    char name[LIBRARY_NAME_MAX + 1];
+    int drive;
+    bool boot, pending, ok;
+    uint32_t id;
+    uint64_t after;
+} mount_request;
+
+static uint32_t read_le32(const unsigned char *p) {
+    return (uint32_t)p[0] | (uint32_t)p[1]<<8 | (uint32_t)p[2]<<16 | (uint32_t)p[3]<<24;
+}
+static bool decimal(const char *p,size_t n,uint32_t *value) {
+    *value=0;
+    if(!n || n>10) return false;
+    for(size_t i=0;i<n;i++) {
+        if(p[i]<'0' || p[i]>'9' || *value>(UINT32_MAX-(unsigned)(p[i]-'0'))/10) return false;
+        *value=*value*10+(unsigned)(p[i]-'0');
+    }
+    return true;
+}
 
 static err_t release_client(web_client_t *c, bool abort_now) {
     struct tcp_pcb *pcb = c->pcb;
@@ -97,6 +118,54 @@ static void message(web_client_t *c, int code, const char *reason, const char *m
             (const unsigned char *)c->body, strlen(c->body));
 }
 
+// Library handlers write their bounded reply directly into this client's buffer.
+static void library_reply(web_client_t *c,int status) {
+    respond(c,status,status<400?"OK":"Error",status<400?"application/json":"text/plain; charset=utf-8",
+            (const unsigned char *)c->body,strlen(c->body));
+}
+static void mount_reply(web_client_t *c,int status) {
+    snprintf(c->body,sizeof(c->body),"{\"id\":%lu,\"pending\":%s,\"ok\":%s}",
+             (unsigned long)mount_request.id,mount_request.pending?"true":"false",mount_request.ok?"true":"false");
+    library_reply(c,status);
+}
+static void disk_request(web_client_t *c,const char *path,const char *body,size_t length) {
+    int status=400; uint32_t id;
+    if(mount_request.pending) { message(c,409,"Conflict","Wait for the disk to finish loading."); return; }
+    if(!strcmp(path,"/upload/start")) {
+        const char *sep=memchr(body,'\n',length); uint32_t size;
+        if(!sep || !decimal(body,(size_t)(sep-body),&size) || length-(size_t)(sep+1-body)>LIBRARY_NAME_MAX || memchr(body,0,length)) {
+            message(c,400,"Bad Request","Send size, a line break, and the disk filename."); return;
+        }
+        char name[LIBRARY_NAME_MAX+1]; size_t n=length-(size_t)(sep+1-body);
+        memcpy(name,sep+1,n); name[n]=0;
+        status=library_begin(name,size,c->body,sizeof(c->body));
+    } else if(!strcmp(path,"/upload/chunk")) {
+        if(length<=8) { message(c,400,"Bad Request","Empty upload chunk."); return; }
+        const unsigned char *p=(const unsigned char *)body;
+        status=library_chunk(read_le32(p),read_le32(p+4),p+8,length-8,c->body,sizeof(c->body));
+    } else if(!strcmp(path,"/upload/finish") || !strcmp(path,"/upload/cancel")) {
+        if(!decimal(body,length,&id)) { message(c,400,"Bad Request","Invalid upload id."); return; }
+        status=!strcmp(path,"/upload/finish")?library_finish(id,c->body,sizeof(c->body)):library_cancel(id,c->body,sizeof(c->body));
+    } else if(!strcmp(path,"/disks/mount")) {
+        // Body is boot|insert, newline, zero-based drive, newline, filename.
+        const char *sep=memchr(body,'\n',length);
+        if(!sep || (size_t)(sep-body)+4>length || memchr(body,0,length)) { message(c,400,"Bad Request","Invalid disk selection."); return; }
+        bool boot=sep-body==4 && !memcmp(body,"boot",4);
+        if(!boot && !(sep-body==6 && !memcmp(body,"insert",6))) { message(c,400,"Bad Request","Choose Boot or Insert."); return; }
+        int drive=sep[1]-'0'; size_t n=length-(size_t)(sep+3-body);
+        if((drive!=0 && drive!=1) || sep[2]!='\n' || (boot && drive!=0) || n>LIBRARY_NAME_MAX) { message(c,400,"Bad Request","Invalid drive or filename."); return; }
+        char name[LIBRARY_NAME_MAX+1]; memcpy(name,sep+3,n); name[n]=0;
+        if(!library_name_valid(name)) { message(c,400,"Bad Request","Unsupported disk filename."); return; }
+        if(library_uploading() || typing_pending() || pending_key) { message(c,409,"Conflict","Wait for uploading or typing to finish before changing disks."); return; }
+        strcpy(mount_request.name,name); mount_request.drive=drive; mount_request.boot=boot;
+        mount_request.pending=true; mount_request.ok=false; mount_request.id++;
+        // Let the acceptance response leave lwIP before a first mount converts tracks.
+        mount_request.after=time_us_64()+250000;
+        mount_reply(c,202); return;
+    } else { message(c,404,"Not Found","Not found"); return; }
+    library_reply(c,status);
+}
+
 static void state_reply(web_client_t *c) {
     int rt = 0;
     size_t n = (size_t)snprintf(c->body, sizeof(c->body),
@@ -143,6 +212,7 @@ static void parse_request(web_client_t *c) {
         (strcmp(version,"HTTP/1.1") && strcmp(version,"HTTP/1.0"))) {
         message(c,400,"Bad Request","Bad request line"); return;
     }
+    size_t input_limit=!strcmp(path,"/upload/chunk")?LIBRARY_CHUNK+8:INPUT_CAP;
     size_t length=0; bool have_length=false, control=false;
     for (char *p=line_end+2; p<end; ) {
         char *q=strstr(p,"\r\n");
@@ -158,7 +228,7 @@ static void parse_request(web_client_t *c) {
             for(char *d=v; d<vend; ++d) {
                 if(!isdigit((unsigned char)*d)) { message(c,400,"Bad Request","Bad length"); return; }
                 length=length*10+(unsigned)(*d-'0');
-                if(length>INPUT_CAP) { message(c,413,"Payload Too Large","Send at most 512 bytes"); return; }
+                if(length>input_limit) { message(c,413,"Payload Too Large","Request exceeds this endpoint's size limit."); return; }
             }
         } else if(name_len==17 && !strncasecmp(p,"Transfer-Encoding",17)) {
             message(c,400,"Bad Request","Chunked requests are not supported"); return;
@@ -172,12 +242,22 @@ static void parse_request(web_client_t *c) {
     if(!strcmp(method,"GET")) {
         if(!strcmp(path,"/")) respond(c,200,"OK","text/html; charset=utf-8",web_page,sizeof(web_page));
         else if(!strcmp(path,"/state")) state_reply(c);
+        else if(!strcmp(path,"/mount")) mount_reply(c,200);
+        else if(!strcmp(path,"/disks") || !strncmp(path,"/disks?offset=",14)) {
+            uint32_t offset=0;
+            if(path[6] && !decimal(path+14,strlen(path+14),&offset)) { message(c,400,"Bad Request","Invalid list position."); return; }
+            library_reply(c,library_list(offset,c->body,sizeof(c->body)));
+        }
         else message(c,404,"Not Found","Not found");
         return;
     }
     if(strcmp(method,"POST")) { message(c,405,"Method Not Allowed","Use GET or POST"); return; }
     if(!control) { message(c,403,"Forbidden","X-Apple2-Control: 1 required"); return; }
     if(!have_length) { message(c,411,"Length Required","Content-Length required"); return; }
+    if(!strncmp(path,"/upload/",8) || !strcmp(path,"/disks/mount")) {
+        disk_request(c,path,body,length); return;
+    }
+    if(mount_request.pending) { message(c,409,"Conflict","Wait for the disk to finish loading."); return; }
     if(!strcmp(path,"/type") || !strcmp(path,"/text")) {
         if(disk_ui_is_visible()) { message(c,409,"Conflict","Close the disk menu before typing BASIC"); return; }
         for(size_t i=0;i<length;++i) {
@@ -259,7 +339,7 @@ void web_control_address(char *out,size_t cap) {
 }
 void web_control_toggle(void) {
     if(enabled) {
-        enabled=false; pending_key=0;
+        enabled=false; pending_key=0; mount_request.pending=false; library_shutdown();
         if(listener) { tcp_accept(listener,NULL); tcp_close(listener); listener=NULL; }
         for(size_t i=0;i<CLIENTS;++i) if(clients[i].pcb) release_client(&clients[i],true);
         MII_DEBUG_PRINTF("web: control OFF\n"); return;
@@ -282,6 +362,11 @@ void web_control_toggle(void) {
     MII_DEBUG_PRINTF("web: control ON %s\n",address);
 }
 void web_control_poll(void) {
+    library_poll();
+    if(mount_request.pending && time_us_64()>=mount_request.after) {
+        mount_request.ok=disk_ui_mount_file(mount_request.name,mount_request.drive,mount_request.boot);
+        mount_request.pending=false;
+    }
     if(pending_key) {
         uint8_t key=pending_key; pending_key=0;
         remote_control_key(key);

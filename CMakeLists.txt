@@ -413,7 +413,7 @@ if(NETCARD_ENABLED)
         string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _web_bytes "${_web_hex}")
         file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/generated")
         file(WRITE "${CMAKE_BINARY_DIR}/generated/web_page.h" "static const unsigned char web_page[] = {${_web_bytes}};\n")
-        target_sources(${BUILD_NAME} PRIVATE src/web_control.c)
+        target_sources(${BUILD_NAME} PRIVATE src/web_control.c src/disk_library.c)
         target_compile_definitions(${BUILD_NAME} PRIVATE NETCARD_WEB_CONTROL=1)
     endif()
     target_link_libraries(${BUILD_NAME}

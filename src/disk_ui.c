@@ -505,9 +505,9 @@ static bool disk_ui_delete_selected_file(void)
 }
 
 // Handle loading complete - mount disk and perform action
-static void handle_disk_loaded(void) {
+static bool handle_disk_loaded(void) {
     disk_ui_hide();
-    if (disk_ui_is_visible()) return;
+    if (disk_ui_is_visible()) return false;
     if (g_mii) {
         int preserve_state = (selected_action == 1) ? 1 : 0;  // INSERT preserves state
         if (0 == disk_mount_to_emulator(
@@ -549,10 +549,35 @@ static void handle_disk_loaded(void) {
             }
         } else {
             MII_DEBUG_PRINTF("Disk UI: failed to mount disk to emulator\n");
+            return false;
         }
     } else {
         MII_DEBUG_PRINTF("Disk UI: warning - no emulator reference, disk not mounted\n");
+        return false;
     }
+    return true;
+}
+
+bool disk_ui_mount_file(const char *name, int drive, bool boot) {
+    if(!g_mii || drive<0 || drive>1 || (boot && drive!=0)) return false;
+    // show saves Apple RAM before reusing it for the file list.
+    disk_ui_show();
+    if(!disk_ui_is_visible()) return false;
+    mutex_enter_blocking(&video_mutex);
+    strcpy(selected_dir,"/apple");
+    int count=disk_scan_directory(selected_dir), index=-1;
+    if(count>=0) for(int i=0;i<count;i++)
+        if(g_disk_list[i].type!=DIR_TYPE && !strcmp(g_disk_list[i].filename,name)) { index=i; break; }
+    selected_drive=drive; selected_action=boot?0:1;
+    read_only=false; bdsk_recreate=false;
+    ui_state=DISK_UI_LOADING; ui_dirty=true;
+    mutex_exit(&video_mutex);
+    if(index<0) { disk_ui_hide(); return false; }
+    if(g_loaded_disks[drive].loaded && disk_eject_from_emulator(drive,g_mii,g_disk2_slot)<0) {
+        disk_ui_hide(); return false;
+    }
+    if(disk_load_image(drive,index,true)<0) { disk_ui_hide(); return false; }
+    return handle_disk_loaded();
 }
 
 static bool disk_ui_select_loaded_file(int drive)

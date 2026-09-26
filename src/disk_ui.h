@@ -64,6 +64,9 @@ bool disk_ui_needs_redraw(void);
 // Get currently selected drive (0 or 1)
 int disk_ui_get_selected_drive(void);
 
+// Mount a named /apple disk from the browser. Call on core 0 outside lwIP callbacks.
+bool disk_ui_mount_file(const char *name, int drive, bool boot);
+
 // Show loading screen
 void disk_ui_show_loading(void);
 

@@ -6,14 +6,14 @@ import assert from 'node:assert/strict';
 const html=readFileSync(new URL('../src/web_control.html',import.meta.url),'utf8');
 const source=html.split('<script>')[1].split('</script>')[0].replace('renderCards();refresh();','renderCards();');
 function fixture(){
- const els=new Map(), sent=[];let clock=0,postHook=null;
+ const els=new Map(), sent=[];let clock=0,postHook=null,apiHook=null;
  const element=()=>({hidden:false,disabled:false,textContent:'',innerHTML:'',value:'',dataset:{},classList:{toggle(){},remove(){}},setAttribute(){},scrollIntoView(){},replaceChildren(){},append(){}});
  const get=id=>{if(!els.has(id))els.set(id,element());return els.get(id);};
  const state={menu:false,queued:0,graphics:false,basic_prompt:true,screen:']\n'};
- const context=vm.createContext({document:{getElementById:get,createElement:element,querySelectorAll:()=>[]},localStorage:{getItem:()=>null,setItem(){}},AbortController,Date:{now:()=>clock+=1000},setTimeout:(f,ms)=>setTimeout(f,Math.min(ms,1)),clearTimeout,
- fetch:async(path,opts)=>{if(opts.method==='POST'){sent.push([path,opts.body]);if(postHook)await postHook(path,opts.body);else if(path==='/type')state.screen=']'+opts.body+'\n';return {ok:true};}return {ok:true,json:async()=>({...state})};}});
+ const context=vm.createContext({document:{getElementById:get,createElement:element,querySelectorAll:()=>[]},Blob,localStorage:{getItem:()=>null,setItem(){}},AbortController,Date:{now:()=>clock+=1000},setTimeout:(f,ms)=>setTimeout(f,Math.min(ms,1)),clearTimeout,
+ fetch:async(path,opts)=>{if(apiHook){const result=await apiHook(path,opts);if(result)return result;}if(path.startsWith('/disks')&&opts.method==='GET')return {ok:true,json:async()=>({files:[],next:0,free:1048576})};if(opts.method==='POST'){sent.push([path,opts.body]);if(postHook)await postHook(path,opts.body);else if(path==='/type')state.screen=']'+opts.body+'\n';return {ok:true};}return {ok:true,json:async()=>({...state})};}});
  vm.runInContext(source,context);
- return {run:code=>vm.runInContext(code,context),get,sent,state,hook:fn=>postHook=fn};
+ return {run:code=>vm.runInContext(code,context),get,sent,state,hook:fn=>postHook=fn,api:fn=>apiHook=fn};
 }
 {
  const f=fixture();f.run('startLesson(lessons[1]);stepIndex=1;renderStep();');
@@ -111,3 +111,62 @@ console.log('PASS: HTTP starter and case-sensitive BASIC URLs.');
  assert.equal(f.get('listing').value,readFileSync(new URL('../basic/http-api-demo.bas',import.meta.url),'utf8').trim());
 }
 console.log('PASS: HTTP API starter matches the runnable BASIC source.');
+
+{
+ const f=fixture(),calls=[];let received=0;
+ f.api(async(path,opts)=>{
+  if(!path.startsWith('/upload/'))return;
+  calls.push([path,opts.body]);
+  if(path==='/upload/start')return {ok:true,json:async()=>({id:9,received:0,size:143360})};
+  if(path==='/upload/chunk'){
+   const p=Buffer.from(opts.body);assert.equal(p.readUInt32LE(0),9);assert.equal(p.readUInt32LE(4),received);assert(p.length<=1032);
+   received+=p.length-8;return {ok:true,json:async()=>({id:9,received})};
+  }
+  return {ok:true,json:async()=>({name:'Custom.dsk'})};
+ });
+ await f.run("uploadSelected([{file:Object.assign(new Blob([new Uint8Array(143360)]),{name:'Custom.dsk'}),name:'Custom.dsk'}])");
+ assert.equal(received,143360);assert.equal(calls.at(-1)[0],'/upload/finish');
+ assert(!calls.some(([p])=>p==='/disks/mount'),'Uploading never boots or inserts automatically');
+ assert(f.get('libraryNotice').textContent.startsWith('Added 1 disk'));assert.equal(f.run('busy'),false);
+ assert.equal(f.run("suggestDiskName('AppleWorks 2.0 Disk 1 Boot - Apple 1986.po')"),'AppleWorks Startup.po');
+ assert.throws(()=>f.run("checkDiskFile({size:143360,name:'x.dsk'},'x.po')"),/sector order/);
+ assert.throws(()=>f.run("checkDiskFile({size:819200},'large.po')"),/standard 140 KB/);
+ assert.throws(()=>f.run("checkDiskFile({size:143360},'../wifi.ini')"),/filename/);
+}
+{
+ const f=fixture(),calls=[];let chunks=0;
+ f.api(async(path,opts)=>{
+  if(!path.startsWith('/upload/'))return;
+  calls.push(path);
+  if(path==='/upload/start')return {ok:true,json:async()=>({id:3})};
+  if(path==='/upload/chunk'){if(++chunks===2)f.get('cancelUpload').onclick();return {ok:true,json:async()=>({received:chunks*1024})};}
+  return {ok:true,json:async()=>({})};
+ });
+ await f.run("uploadSelected([{file:new Blob([new Uint8Array(143360)]),name:'Cancel.dsk'}])");
+ assert.equal(chunks,2);assert(calls.includes('/upload/cancel'));assert(!calls.includes('/upload/finish'));
+ assert(f.get('libraryNotice').textContent.includes('cancelled'));
+}
+{
+ const f=fixture();let posts=0;
+ f.api(async(path)=>{if(path==='/upload/start'){posts++;return {ok:false,text:async()=> 'That name already exists. Choose a new name.'};}});
+ await f.run("uploadSelected([{file:new Blob([new Uint8Array(143360)]),name:'Keep.dsk'}])");
+ assert.equal(posts,1);assert(f.get('libraryNotice').textContent.includes('already exists'));
+ f.get('basicFile').files=[{name:'Mine.bas',size:30,text:async()=> 'NEW\n10 PRINT "MINE"\nRUN\n'}];
+ await f.get('basicFile').onchange();assert.equal(f.get('listing').value,'10 PRINT "MINE"');
+ assert.equal(f.sent.length,0,'Opening a source file only edits the browser');
+}
+{
+ const f=fixture(),calls=[];
+ f.api(async(path,opts)=>{
+  if(path==='/disks/mount'){calls.push(opts.body);return {ok:true,json:async()=>({id:8,pending:true})};}
+  if(path==='/mount')return {ok:true,json:async()=>({id:8,pending:false,ok:true})};
+ });
+ f.run("bootChoice='My App.dsk'");assert.equal(calls.length,0);
+ f.get('bootNo').onclick();assert.equal(calls.length,0);
+ f.run("bootChoice='My App.dsk'");f.get('bootYes').onclick();
+ while(f.run('busy'))await new Promise(r=>setTimeout(r,2));
+ assert.deepEqual(calls,['boot\n0\nMy App.dsk']);
+ await f.run("operation(token=>chooseDisk('Data.po',token,{drive:2,boot:false}))");
+ assert.equal(calls.at(-1),'insert\n1\nData.po');
+}
+console.log('PASS: disk upload framing/progress, no automatic boot, cancellation, conflicts, filename/format validation, BASIC file review, and explicit Boot/Insert.');

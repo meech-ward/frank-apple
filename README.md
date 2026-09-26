@@ -13,6 +13,8 @@ It is an independent downstream, not an official FRANK release.
 
 - Tufty parallel LCD, PSRAM, flash-backed disk storage, buttons and activity LEDs.
 - Pico 2 W SPI LCD and SD-card support for the wiring described below.
+- Browser disk uploads and library, multi-disk Boot/Insert controls, blank data
+  disks, and BASIC source-file import. Bring your own applications.
 - Local browser typing, a 40/80-column text view, guided Apple II lessons,
   and editable BASIC programs. No account or cloud service required.
 - Optional Wi-Fi configured with a separate `wifi.ini` file.
