@@ -3,6 +3,8 @@
  * Implements TinyUSB Host callbacks for keyboard and mouse
  * 
  * Based on TinyUSB HID host example
+ * Copyright (c) 2021, Ha Thach (tinyusb.org)
+ * See ../../licenses/TinyUSB-MIT.txt.
  * SPDX-License-Identifier: MIT
  */
 
@@ -23,9 +25,10 @@
 
 #define MAX_REPORT 4
 
-// Per-device, per-instance HID info for generic report parsing
-// Index by dev_addr * CFG_TUH_HID + instance (simplified indexing)
+// Generic report descriptors indexed by TinyUSB global HID instance slots.
+// The device field guards against stale reports after a slot is reused.
 static struct {
+    uint8_t device;
     uint8_t report_count;
     tuh_hid_report_info_t report_info[MAX_REPORT];
 } hid_info[CFG_TUH_HID];
@@ -49,33 +52,40 @@ static volatile int8_t gamepad_axis_y = 0;
 static volatile uint8_t gamepad_dpad = 0;
 static volatile uint16_t gamepad_buttons = 0;
 static volatile int gamepad_connected = 0;
+static uint8_t gamepad_device, gamepad_instance;
 
 // Device connection state
 static volatile int keyboard_connected = 0;
+static uint8_t keyboard_device, keyboard_instance;
 static volatile int mouse_connected = 0;
 
 // Key action queue (for detecting press/release)
 #define KEY_ACTION_QUEUE_SIZE 32
 typedef struct {
     uint8_t keycode;
+    uint8_t modifiers;
     int down;
 } key_action_t;
 
 static key_action_t key_action_queue[KEY_ACTION_QUEUE_SIZE];
 static volatile int key_action_head = 0;
 static volatile int key_action_tail = 0;
+static int key_action_overflow = 0;
 
 //--------------------------------------------------------------------
 // Internal functions
 //--------------------------------------------------------------------
 
-static void queue_key_action(uint8_t keycode, int down) {
+static void queue_key_action(uint8_t keycode, int down, uint8_t modifiers) {
+    if (key_action_overflow) return;
     int next_head = (key_action_head + 1) % KEY_ACTION_QUEUE_SIZE;
-    if (next_head != key_action_tail) {
-        key_action_queue[key_action_head].keycode = keycode;
-        key_action_queue[key_action_head].down = down;
-        key_action_head = next_head;
+    if (next_head == key_action_tail) {
+        /* Recover from the latest complete report instead of dropping releases. */
+        key_action_overflow = 1;
+        return;
     }
+    key_action_queue[key_action_head] = (key_action_t){keycode, modifiers, down};
+    key_action_head = next_head;
 }
 
 static int find_keycode_in_report(hid_keyboard_report_t const *report, uint8_t keycode) {
@@ -96,36 +106,14 @@ static void process_generic_report(uint8_t dev_addr, uint8_t instance, uint8_t c
 //--------------------------------------------------------------------
 
 static void process_kbd_report(hid_keyboard_report_t const *report, hid_keyboard_report_t const *prev_report) {
-    // Handle modifier changes
-    uint8_t released_mods = prev_report->modifier & ~(report->modifier);
-    uint8_t pressed_mods = report->modifier & ~(prev_report->modifier);
-    
-    // Map modifier bits to pseudo-keycodes (using high byte to distinguish)
-    // These will be translated in the wrapper
-    if (released_mods & (KEYBOARD_MODIFIER_LEFTSHIFT | KEYBOARD_MODIFIER_RIGHTSHIFT)) {
-        queue_key_action(0xE1, 0); // SHIFT released (HID Left Shift)
-    }
-    if (pressed_mods & (KEYBOARD_MODIFIER_LEFTSHIFT | KEYBOARD_MODIFIER_RIGHTSHIFT)) {
-        queue_key_action(0xE1, 1); // SHIFT pressed
-    }
-    if (released_mods & (KEYBOARD_MODIFIER_LEFTCTRL | KEYBOARD_MODIFIER_RIGHTCTRL)) {
-        queue_key_action(0xE0, 0); // CTRL released
-    }
-    if (pressed_mods & (KEYBOARD_MODIFIER_LEFTCTRL | KEYBOARD_MODIFIER_RIGHTCTRL)) {
-        queue_key_action(0xE0, 1); // CTRL pressed
-    }
-    if (released_mods & (KEYBOARD_MODIFIER_LEFTALT | KEYBOARD_MODIFIER_RIGHTALT)) {
-        queue_key_action(0xE2, 0); // ALT released
-    }
-    if (pressed_mods & (KEYBOARD_MODIFIER_LEFTALT | KEYBOARD_MODIFIER_RIGHTALT)) {
-        queue_key_action(0xE2, 1); // ALT pressed
-    }
-    
+    if (report->modifier != prev_report->modifier)
+        queue_key_action(0, 0, report->modifier);
+
     // Check for released keys
     for (int i = 0; i < 6; i++) {
         uint8_t keycode = prev_report->keycode[i];
         if (keycode && !find_keycode_in_report(report, keycode)) {
-            queue_key_action(keycode, 0); // Key released
+            queue_key_action(keycode, 0, report->modifier); // Key released
         }
     }
     
@@ -133,9 +121,16 @@ static void process_kbd_report(hid_keyboard_report_t const *report, hid_keyboard
     for (int i = 0; i < 6; i++) {
         uint8_t keycode = report->keycode[i];
         if (keycode && !find_keycode_in_report(prev_report, keycode)) {
-            queue_key_action(keycode, 1); // Key pressed
+            queue_key_action(keycode, 1, report->modifier); // Key pressed
         }
     }
+}
+
+static void accept_kbd_report(hid_keyboard_report_t const *report) {
+    for (unsigned i = 0; i < 6; ++i)
+        if (report->keycode[i] && report->keycode[i] <= 3) return;
+    process_kbd_report(report, &prev_kbd_report);
+    prev_kbd_report = *report;
 }
 
 //--------------------------------------------------------------------
@@ -207,10 +202,9 @@ static void process_gamepad_report(uint8_t const *report, uint16_t len) {
 //--------------------------------------------------------------------
 
 static void process_generic_report(uint8_t dev_addr, uint8_t instance, uint8_t const *report, uint16_t len) {
-    (void)dev_addr;
-    
     // Bounds check
-    if (instance >= CFG_TUH_HID || report == NULL || len == 0) {
+    if (instance >= CFG_TUH_HID || hid_info[instance].device != dev_addr ||
+        report == NULL || len == 0) {
         return;
     }
     
@@ -245,15 +239,21 @@ static void process_generic_report(uint8_t dev_addr, uint8_t instance, uint8_t c
     if (rpt_info->usage_page == HID_USAGE_PAGE_DESKTOP) {
         switch (rpt_info->usage) {
             case HID_USAGE_DESKTOP_KEYBOARD:
-                process_kbd_report((hid_keyboard_report_t const *)report, &prev_kbd_report);
-                prev_kbd_report = *(hid_keyboard_report_t const *)report;
+                if (len >= sizeof(hid_keyboard_report_t))
+                    accept_kbd_report((hid_keyboard_report_t const *)report);
                 break;
             case HID_USAGE_DESKTOP_MOUSE:
-                process_mouse_report((hid_mouse_report_t const *)report);
+                if (len >= sizeof(hid_mouse_report_t))
+                    process_mouse_report((hid_mouse_report_t const *)report);
                 break;
             case HID_USAGE_DESKTOP_GAMEPAD:
             case HID_USAGE_DESKTOP_JOYSTICK:
-                process_gamepad_report(report, len);
+                if (len >= 7) {
+                    gamepad_connected = 1;
+                    gamepad_device = dev_addr;
+                    gamepad_instance = instance;
+                    process_gamepad_report(report, len);
+                }
                 break;
             default:
                 break;
@@ -274,6 +274,8 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *desc_re
     
     if (itf_protocol == HID_ITF_PROTOCOL_KEYBOARD) {
         keyboard_connected = 1;
+        keyboard_device = dev_addr;
+        keyboard_instance = instance;
         HID_DEBUG_PRINTF("  -> Keyboard connected\n");
     } else if (itf_protocol == HID_ITF_PROTOCOL_MOUSE) {
         mouse_connected = 1;
@@ -292,6 +294,7 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *desc_re
             return;
         }
         
+        hid_info[instance].device = dev_addr;
         hid_info[instance].report_count = tuh_hid_parse_report_descriptor(
             hid_info[instance].report_info, MAX_REPORT, desc_report, desc_len);
         
@@ -301,6 +304,12 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *desc_re
                 uint8_t usage = hid_info[instance].report_info[i].usage;
                 if (usage == HID_USAGE_DESKTOP_GAMEPAD || usage == HID_USAGE_DESKTOP_JOYSTICK) {
                     gamepad_connected = 1;
+                    gamepad_device = dev_addr;
+                    gamepad_instance = instance;
+                } else if (usage == HID_USAGE_DESKTOP_KEYBOARD) {
+                    keyboard_connected = 1;
+                    keyboard_device = dev_addr;
+                    keyboard_instance = instance;
                 }
             }
         }
@@ -316,18 +325,24 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *desc_re
 void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance) {
     uint8_t const itf_protocol = tuh_hid_interface_protocol(dev_addr, instance);
     
-    if (itf_protocol == HID_ITF_PROTOCOL_KEYBOARD) {
+    if (keyboard_connected && dev_addr == keyboard_device && instance == keyboard_instance) {
+        hid_keyboard_report_t empty = {0};
+        accept_kbd_report(&empty);
         keyboard_connected = 0;
-    } else if (itf_protocol == HID_ITF_PROTOCOL_MOUSE) {
+    }
+    if (itf_protocol == HID_ITF_PROTOCOL_MOUSE) {
         mouse_connected = 0;
-    } else if (itf_protocol == HID_ITF_PROTOCOL_NONE) {
-        // Could be a gamepad
+    }
+    // A composite interface can own both keyboard and gamepad state.
+    if (gamepad_connected && dev_addr == gamepad_device && instance == gamepad_instance) {
         gamepad_connected = 0;
         gamepad_buttons = 0;
         gamepad_dpad = 0;
-        gamepad_axis_x = 128;
-        gamepad_axis_y = 128;
+        gamepad_axis_x = 0;
+        gamepad_axis_y = 0;
     }
+    if (instance < CFG_TUH_HID && hid_info[instance].device == dev_addr)
+        memset(&hid_info[instance], 0, sizeof(hid_info[instance]));
 }
 
 // Invoked when report is received
@@ -351,8 +366,7 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
     switch (itf_protocol) {
         case HID_ITF_PROTOCOL_KEYBOARD:
             if (report && len >= sizeof(hid_keyboard_report_t)) {
-                process_kbd_report((hid_keyboard_report_t const *)report, &prev_kbd_report);
-                prev_kbd_report = *(hid_keyboard_report_t const *)report;
+                accept_kbd_report((hid_keyboard_report_t const *)report);
             }
             break;
         
@@ -363,10 +377,18 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
             break;
         
         default:
+            // Generic keyboard collections with the standard eight-byte layout.
+            // Preserve raw parsing for the already-supported gamepad format.
+            if (keyboard_connected && dev_addr == keyboard_device && instance == keyboard_instance) {
+                process_generic_report(dev_addr, instance, report, len);
+                break;
+            }
             // Generic device (gamepad/joystick) - simple direct parsing
             // Skip complex report descriptor parsing, just read raw data
-            if (report && len >= 2) {
+            if (report && len >= 7) {
                 gamepad_connected = 1;
+                gamepad_device = dev_addr;
+                gamepad_instance = instance;
                 process_gamepad_report(report, len);
             }
             break;
@@ -389,6 +411,7 @@ void usbhid_init(void) {
     HID_DEBUG_PRINTF("USB HID: TinyUSB Host initialized\n");
     
     // Clear state
+    memset(hid_info, 0, sizeof(hid_info));
     memset(&prev_kbd_report, 0, sizeof(prev_kbd_report));
     memset(&prev_mouse_report, 0, sizeof(prev_mouse_report));
     cumulative_dx = 0;
@@ -398,6 +421,12 @@ void usbhid_init(void) {
     mouse_has_motion = 0;
     key_action_head = 0;
     key_action_tail = 0;
+    key_action_overflow = 0;
+    keyboard_connected = mouse_connected = gamepad_connected = 0;
+    keyboard_device = keyboard_instance = 0;
+    gamepad_device = gamepad_instance = 0;
+    gamepad_axis_x = gamepad_axis_y = 0;
+    gamepad_buttons = gamepad_dpad = 0;
 }
 
 void usbhid_task(void) {
@@ -417,7 +446,7 @@ void usbhid_get_keyboard_state(usbhid_keyboard_state_t *state) {
     if (state) {
         memcpy(state->keycode, prev_kbd_report.keycode, 6);
         state->modifier = prev_kbd_report.modifier;
-        state->has_key = (key_action_head != key_action_tail);
+        state->has_key = key_action_overflow || (key_action_head != key_action_tail);
     }
 }
 
@@ -437,15 +466,30 @@ void usbhid_get_mouse_state(usbhid_mouse_state_t *state) {
     }
 }
 
-int usbhid_get_key_action(uint8_t *keycode, int *down) {
-    if (key_action_head == key_action_tail) {
-        return 0; // No actions queued
+int usbhid_get_key_event(uint8_t *keycode, int *down, uint8_t *modifiers) {
+    if (!keycode || !down || !modifiers) return 0;
+    if (key_action_overflow) {
+        key_action_head = key_action_tail = 0;
+        key_action_overflow = 0;
+        for (unsigned i = 0; i < 6; ++i)
+            if (prev_kbd_report.keycode[i])
+                queue_key_action(prev_kbd_report.keycode[i], 2, prev_kbd_report.modifier);
+        *keycode = 0;
+        *down = -1;
+        *modifiers = prev_kbd_report.modifier;
+        return 1;
     }
-    
+    if (key_action_head == key_action_tail) return 0;
     *keycode = key_action_queue[key_action_tail].keycode;
     *down = key_action_queue[key_action_tail].down;
+    *modifiers = key_action_queue[key_action_tail].modifiers;
     key_action_tail = (key_action_tail + 1) % KEY_ACTION_QUEUE_SIZE;
     return 1;
+}
+
+int usbhid_get_key_action(uint8_t *keycode, int *down) {
+    uint8_t modifiers;
+    return usbhid_get_key_event(keycode, down, &modifiers);
 }
 
 // Gamepad API functions

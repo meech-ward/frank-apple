@@ -18,10 +18,10 @@
 #include "debug_log.h"
 #include "disk_loader.h"
 #include "board_config.h"
-#include "../drivers/psram_allocator.h"
+#include "../drivers/board_memory.h"
 
 #if PICO_RP2350
-#define HDD_CACHE_BASE (PSRAM_DATA + 2 * BDSK_BYTES)
+#define HDD_CACHE_BASE (EXTERNAL_MEMORY_DATA + 2 * BDSK_BYTES)
 #endif
 
 void

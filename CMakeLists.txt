@@ -78,8 +78,13 @@ endif()
 # When enabled, USB CDC stdio is disabled!
 option(USB_HID_ENABLED "Enable USB HID Host for keyboard/gamepad" ON)
 
-# PS/2 keyboard support toggle
-option(PS2_KEYBOARD_ENABLED "Enable PS/2 keyboard input" ON)
+# The supported downstream boards use USB or browser input. Legacy board
+# profiles can still opt into their separately licensed PS/2 implementation.
+set(PS2_DEFAULT ON)
+if(BOARD_VARIANT STREQUAL "P2W" OR BOARD_VARIANT STREQUAL "TUFTY")
+    set(PS2_DEFAULT OFF)
+endif()
+option(PS2_KEYBOARD_ENABLED "Enable legacy PS/2 keyboard input" ${PS2_DEFAULT})
 
 # Verbose debug logging toggle
 option(DEBUG_LOGS_ENABLED "Enable verbose debug logging" OFF)
@@ -164,8 +169,10 @@ if(COMMAND pico_extras_init)
     pico_extras_init()
 endif()
 
-# Copy driver subdirectories from murmdoom structure
-add_subdirectory(drivers/ps2kbd)
+# Select only the input and storage drivers enabled for this build.
+if(PS2_KEYBOARD_ENABLED)
+    add_subdirectory(drivers/ps2kbd)
+endif()
 add_subdirectory(drivers/fatfs)
 if(BOARD_VARIANT STREQUAL "TUFTY")
     # No card slot: FatFs drive 0 lives in a region of the 16 MB flash.
@@ -180,12 +187,14 @@ if(USB_HID_ENABLED)
 endif()
 
 # Collect driver sources based on configuration
-set(DRIVER_SOURCES drivers/nespad/nespad.c)
+set(DRIVER_SOURCES)
+if(NOT BOARD_VARIANT STREQUAL "P2W" AND NOT BOARD_VARIANT STREQUAL "TUFTY")
+    list(APPEND DRIVER_SOURCES drivers/nespad/nespad.c)
+endif()
 
 if (PSRAM_SPEED)
     list(APPEND DRIVER_SOURCES
-        drivers/psram_init.c
-        drivers/psram_allocator.c
+        drivers/board_memory.c
     )
 endif()
 
@@ -223,6 +232,7 @@ endif()
 # Apple IIe Emulator sources
 add_executable(${BUILD_NAME}
     src/main.c
+    src/input_controls.c
     src/mii_65c02.c
     src/mii_bank.c
     src/mii_video.c
@@ -266,6 +276,9 @@ else()
 endif()
 
 target_link_libraries(drivers pico_stdlib hardware_dma hardware_pio hardware_spi hardware_pwm)
+if(PSRAM_SPEED)
+    target_link_libraries(drivers hardware_flash hardware_clocks hardware_sync)
+endif()
 
 target_include_directories(${BUILD_NAME} PRIVATE
     src
@@ -382,10 +395,13 @@ target_link_libraries(${BUILD_NAME}
     hardware_vreg
     hardware_spi
     drivers
-    ps2kbd
     ${STORAGE_LIB}
     fatfs
 )
+
+if(PS2_KEYBOARD_ENABLED)
+    target_link_libraries(${BUILD_NAME} ps2kbd)
+endif()
 
 if(USB_HID_ENABLED)
     target_link_libraries(${BUILD_NAME} usbhid)

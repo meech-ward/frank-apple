@@ -11,7 +11,7 @@
 #include "disk_loader.h"
 #include "ff.h"
 #include "pico/stdlib.h"
-#include "../drivers/psram_allocator.h"
+#include "../drivers/board_memory.h"
 
 // MII emulator headers
 #include "mii.h"
@@ -32,9 +32,9 @@ disk_entry_t* g_disk_list = (disk_entry_t*)vram;//[MAX_DISK_IMAGES];
 #if PICO_RP2350
 // drive0_cache lives in PSRAM to save 228KB of SRAM.
 // PSRAM layout: [drive0 BDSK | drive1 BDSK | HDD cache | ...]
-// HDD_CACHE_BASE in mii_dd_stub.c starts at PSRAM_DATA + 2*BDSK_BYTES.
+// HDD_CACHE_BASE in mii_dd_stub.c starts at EXTERNAL_MEMORY_DATA + 2*BDSK_BYTES.
 #if PSRAM_MAX_FREQ_MHZ
-uint8_t *drive0_cache = PSRAM_DATA;
+uint8_t *drive0_cache = EXTERNAL_MEMORY_DATA;
 #else
 // No-PSRAM build: no whole-disk cache. Drive 0 streams one track at a
 // time from its .bdsk through s_bdsk_fp0, kept open while mounted.
@@ -318,9 +318,9 @@ disk_dump_current_track(
     if (!drive) { // drive #0
         memcpy(drive0_cache + track_offset, &desc, sizeof(desc));
         memcpy(drive0_cache + track_offset + sizeof(desc), floppy->curr_track_data, BDSK_TRACK_DATA_SIZE);
-    } else if (butter_psram_size()) { // drive #1
-        memcpy(PSRAM_DATA + BDSK_BYTES + track_offset, &desc, sizeof(desc));
-        memcpy(PSRAM_DATA + BDSK_BYTES + track_offset + sizeof(desc), floppy->curr_track_data, BDSK_TRACK_DATA_SIZE);
+    } else if (external_memory_size()) { // drive #1
+        memcpy(EXTERNAL_MEMORY_DATA + BDSK_BYTES + track_offset, &desc, sizeof(desc));
+        memcpy(EXTERNAL_MEMORY_DATA + BDSK_BYTES + track_offset + sizeof(desc), floppy->curr_track_data, BDSK_TRACK_DATA_SIZE);
     }
 #endif
 
@@ -588,9 +588,9 @@ disk_load_floppy_bdsk_track_from_fatfs(
     }
 #endif
 #if PICO_RP2350
-    if (butter_psram_size()) { // drive #1
-        memcpy(&desc, PSRAM_DATA + BDSK_BYTES + track_offset, sizeof(bdsk_track_desc_t));
-        memcpy(track_buf, PSRAM_DATA + BDSK_BYTES + track_offset + sizeof(bdsk_track_desc_t), BDSK_TRACK_DATA_SIZE);
+    if (external_memory_size()) { // drive #1
+        memcpy(&desc, EXTERNAL_MEMORY_DATA + BDSK_BYTES + track_offset, sizeof(bdsk_track_desc_t));
+        memcpy(track_buf, EXTERNAL_MEMORY_DATA + BDSK_BYTES + track_offset + sizeof(bdsk_track_desc_t), BDSK_TRACK_DATA_SIZE);
         goto ok;
     }
 #endif
@@ -671,11 +671,11 @@ static int disk_load_floppy_bdsk_from_fatfs(int drive, mii_floppy_t *floppy, mii
     }
 #endif
 #if PICO_RP2350
-    if (butter_psram_size()) { // drive #1
-        fr = f_read(fp, PSRAM_DATA + BDSK_BYTES, BDSK_BYTES, &br);
+    if (external_memory_size()) { // drive #1
+        fr = f_read(fp, EXTERNAL_MEMORY_DATA + BDSK_BYTES, BDSK_BYTES, &br);
         if (fr != FR_OK || br != BDSK_BYTES)
             return -1;
-        memcpy(&hdr, PSRAM_DATA + BDSK_BYTES, sizeof hdr);
+        memcpy(&hdr, EXTERNAL_MEMORY_DATA + BDSK_BYTES, sizeof hdr);
         goto ok;
     }
 #endif
@@ -1321,11 +1321,6 @@ int disk_eject_from_emulator(int drive, mii_t *mii, int slot) {
     return 0;
 }
 
-#if !PSRAM_MAX_FREQ_MHZ
-// No-PSRAM build: psram_allocator.c is not compiled, so provide the size query
-// the disk loader uses to gate drive #1 / HDD paths. Zero = "no PSRAM present".
-unsigned int butter_psram_size(void) { return 0; }
-#endif
 
 // ---------------------------------------------------------------------------
 // Autoboot: remember the disk in drive 1 so the next power-up boots it, the way

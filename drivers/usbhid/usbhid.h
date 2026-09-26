@@ -92,6 +92,15 @@ void usbhid_get_mouse_state(usbhid_mouse_state_t *state);
 int usbhid_get_key_action(uint8_t *keycode, int *down);
 
 /**
+ * Read an event with the modifier snapshot from its report. keycode=0 means
+ * modifier-only; down=-1 means queue overflow: release delivered keys before
+ * consuming down=2 replay presses that reconstruct the latest report. Replays
+ * must not repeat toggle actions (Caps Lock, emulator controls).
+ * Call from the same thread as usbhid_task().
+ */
+int usbhid_get_key_event(uint8_t *keycode, int *down, uint8_t *modifiers);
+
+/**
  * Check if a USB gamepad is connected
  * @return Non-zero if gamepad connected
  */

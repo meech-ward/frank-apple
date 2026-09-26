@@ -54,7 +54,7 @@ static void mii_bank_read(mii_bank_t *b, unsigned a, void *out, unsigned n) {
 }
 static void tight_loop_contents(void) {}
 static void sleep_ms(unsigned ms) {}
-static bool ps2kbd_is_show_speed(void) { return false; }
+static bool input_speed_visible(void) { return false; }
 static int mii_disk2_get_motor_state(void) { return 0; }
 static void mii_video_draw_floppy_indicator(uint8_t *fb, int motor, unsigned frame) {}
 static void mii_video_render_text40_rp2350(mii_t *m, uint8_t *fb, int w) {

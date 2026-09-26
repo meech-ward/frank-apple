@@ -13,7 +13,7 @@ if(USB_HID_ENABLED)
     # Add the actual source files when enabled
     target_sources(usbhid INTERFACE
         ${CMAKE_CURRENT_LIST_DIR}/hid_app.c
-        ${CMAKE_CURRENT_LIST_DIR}/usbhid_wrapper.c
+        ${CMAKE_CURRENT_LIST_DIR}/apple_usb_input.c
     )
     
     # Include this directory for tusb_config.h
@@ -33,6 +33,6 @@ if(USB_HID_ENABLED)
 else()
     message(STATUS "USB HID Host disabled (use -DUSB_HID_ENABLED=1 to enable)")
     message(STATUS "  USB CDC stdio remains available for debug output")
-    # Stub functions are provided inline in usbhid_wrapper.h
+    # The emulator's USB calls are compiled only with USB_HID_ENABLED.
     # Do NOT include the usbhid directory to avoid tusb_config conflicts
 endif()

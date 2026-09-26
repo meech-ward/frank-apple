@@ -21,6 +21,8 @@ It is an independent downstream, not an official FRANK release.
 - HTTP/HTTPS GET, POST, PUT, PATCH and DELETE from BASIC, with explicit headers
   and small request bodies. No built-in Supabase project or remote cloud keyboard.
 - Storage, keyboard startup, display and emulation fixes, plus host-side tests.
+- MIT USB input and MIT/BSD Tufty memory support; supported builds exclude the
+  legacy GPL input/memory drivers.
 
 ## Start here
 
@@ -39,18 +41,19 @@ remains in the source tree and is not relicensed by this fork.
 
 ## Distribution status
 
-This is a source development fork. **Public firmware packages are not yet cleared
-for distribution:** GPL drivers, the SDK Wi-Fi driver’s hardware-restricted terms,
-and upstream Apple ROM data need the review described in
-[distribution notes](docs/DISTRIBUTION.md). Attribution alone does not resolve
-those questions. No firmware binaries or application disks are released here.
+The supported Pico/Tufty builds now exclude the identified GPL input/memory
+drivers and retain Wi-Fi under the SDK's Raspberry-Pi-device license. Inherited
+Apple ROMs and the separately licensed SmartPort guest ROM remain as described
+in [distribution notes](docs/DISTRIBUTION.md). This driver update is not a blanket
+clearance of those embedded assets. No firmware binaries or application disks
+are released here.
 
 ## Current validation
 
 The hardware ports, disk saves, browser guide and keyboard were exercised on
-both boards during development. The latest file-based Wi-Fi and expanded HTTP
-builds compile in all four board/USB combinations and pass host tests, including
-live HTTPS echo checks. **Those latest builds still need physical-device
+both boards during development. The latest driver, disk-import, file-based Wi-Fi
+and expanded HTTP changes compile in all four board/USB combinations and pass
+host tests. **Those latest builds still need physical-device
 validation.** See [validation and limits](docs/VALIDATION.md).
 
 ## Upstream and licensing
@@ -61,7 +64,7 @@ when sharing this downstream. Upstream is based on
 
 The original [LICENSE](LICENSE) is retained unchanged: its main grant is MIT,
 and it also lists separately licensed components. Existing file notices and
-third-party licenses continue to apply, including GPL-licensed drivers.
+third-party licenses continue to apply, including the excluded legacy GPL drivers.
 [LICENSE-DOWNSTREAM](LICENSE-DOWNSTREAM) covers our original standalone additions;
 it does not relicense existing code, Apple ROMs, disk images, or third-party
 material. See [third-party notices](THIRD-PARTY-NOTICES.md) for details.

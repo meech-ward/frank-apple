@@ -18,9 +18,12 @@
 #include "hardware/dma.h"  // Include DMA header early before mii_sw.h
 
 #include "board_config.h"
-#include "../drivers/psram_allocator.h"
+#include "../drivers/board_memory.h"
 #include "../drivers/HDMI.h"
+#include "input_controls.h"
+#if ENABLE_PS2_KEYBOARD
 #include "ps2kbd_wrapper.h"
+#endif
 #include "mii.h"
 #include "mii_sw.h"
 #include "mii_bank.h"
@@ -134,11 +137,6 @@ extern uint8_t mii_rom_iiee_video[4096];
 #define HDMI_WIDTH 320
 #define HDMI_HEIGHT 240
 
-#if PSRAM_MAX_FREQ_MHZ
-// PSRAM interface
-extern void psram_init(uint cs_pin);
-extern void psram_set_sram_mode(int enable);
-#endif
 
 // PS/2 keyboard interface
 #ifndef ENABLE_PS2_KEYBOARD
@@ -148,13 +146,6 @@ extern void psram_set_sram_mode(int enable);
 #ifndef ENABLE_DEBUG_LOGS
 #define ENABLE_DEBUG_LOGS 0
 #endif
-extern void ps2kbd_init(void);
-extern void ps2kbd_tick(void);
-extern int ps2kbd_get_key(int* pressed, unsigned char* key);
-extern uint8_t ps2kbd_get_arrow_state(void);  // bits: 0=right, 1=left, 2=down, 3=up
-extern uint8_t ps2kbd_get_modifiers(void);
-extern bool ps2kbd_is_reset_combo(void);  // Ctrl+Alt+Delete pressed
-
 // Keyboard modifier bits (from hid_codes.h)
 #define KEYBOARD_MODIFIER_LEFTALT    (1 << 2)
 #define KEYBOARD_MODIFIER_RIGHTALT   (1 << 6)
@@ -165,7 +156,9 @@ extern bool ps2kbd_is_reset_combo(void);  // Ctrl+Alt+Delete pressed
 #include "nespad/nespad.h"
 
 // USB HID keyboard/gamepad interface
-#include "usbhid/usbhid_wrapper.h"
+#ifdef USB_HID_ENABLED
+#include "usbhid/apple_usb_input.h"
+#endif
 
 #if PICO_RP2350
 // Flash timing configuration for overclocking
@@ -546,7 +539,7 @@ static void process_keyboard(void) {
     
 #ifdef USB_HID_ENABLED
     // Process USB HID keyboard events (same logic as PS/2)
-    while (usbhid_wrapper_get_key(&pressed, &key)) {
+    while (apple_usb_next_key(&pressed, &key)) {
         if (pressed) {
             // Check for F11 - disk selector toggle
             if (key == KEY_F11) {
@@ -620,7 +613,7 @@ void clear_held_key(void) {
 static __not_in_flash() void video_core_iteration(void) {
     video_core_iteration_in_progress = true;
     mii_video_scale_to_hdmi(&g_mii.video, graphics_get_buffer());
-    if (ps2kbd_is_show_speed()) {
+    if (input_speed_visible()) {
         uint32_t khz, percent;
         cpu_calc_speed(&khz, &percent);
         char tmp[32];
@@ -807,8 +800,8 @@ int main() {
     MII_DEBUG_PRINTF("Initializing PSRAM...\n");
 #if PICO_RP2350
     uint psram_pin = get_psram_pin();
-    psram_init(psram_pin);
-    psram_set_sram_mode(0);  // Use PSRAM mode (not SRAM simulation)
+    if (!external_memory_init(psram_pin))
+        panic("PSRAM initialization failed; disk caches cannot be used");
     MII_DEBUG_PRINTF("PSRAM initialized on CS pin %d\n", psram_pin);
 #endif    
     // Test PSRAM read/write
@@ -896,7 +889,7 @@ int main() {
     // Initialize USB HID keyboard/gamepad (if enabled)
 #ifdef USB_HID_ENABLED
     MII_DEBUG_PRINTF("Initializing USB HID Host...\n");
-    usbhid_wrapper_init();
+    apple_usb_init();
     MII_DEBUG_PRINTF("USB HID Host initialized\n");
 #endif
     
@@ -1011,7 +1004,7 @@ int main() {
 #endif
 
 #if PSRAM_MAX_FREQ_MHZ
-    uint32_t bs = butter_psram_size();
+    uint32_t bs = external_memory_size();
 #endif
     mii_startscreen_info_t screen_info = {
         .title = "FRANK Apple",
@@ -1124,7 +1117,7 @@ int main() {
         
 #ifdef USB_HID_ENABLED
         // Poll USB HID devices
-        usbhid_wrapper_poll();
+        apple_usb_poll();
 #endif
         
         // Check for Ctrl+Alt+Delete reset combo
@@ -1134,7 +1127,7 @@ int main() {
         reset_combo |= ps2kbd_is_reset_combo();
     #endif
     #ifdef USB_HID_ENABLED
-        reset_combo |= usbhid_wrapper_is_reset_combo();
+        reset_combo |= apple_usb_reset_requested();
     #endif
         if (reset_combo) {
             if (!reset_combo_active) {
@@ -1164,7 +1157,7 @@ int main() {
         uint32_t combined_gamepad_state = 0;
 #endif
 #ifdef USB_HID_ENABLED
-        combined_gamepad_state |= usbhid_wrapper_get_gamepad_state();
+        combined_gamepad_state |= apple_usb_gamepad_state();
 #endif
         
         {
@@ -1273,7 +1266,7 @@ int main() {
             combined_gamepad_state |= ps2kbd_get_numpad_state();
 #endif
 #ifdef USB_HID_ENABLED
-            mods |= usbhid_wrapper_get_modifiers();
+            mods |= apple_usb_modifiers();
 #endif
             uint8_t btn0 = ((combined_gamepad_state & DPAD_A) || typing_open_apple) ? 0x80 : 0x00;
             uint8_t btn1 = (combined_gamepad_state & DPAD_B) ? 0x80 : 0x00;
@@ -1429,7 +1422,7 @@ int main() {
             // Throttle to real time so the emulator doesn't run too fast.
             next_frame_deadline += target_frame_us;
             int32_t wait = (int32_t)(next_frame_deadline - frame_end);
-            if (wait > 0 && !ps2kbd_is_turbo()) {
+            if (wait > 0 && !input_turbo_active()) {
                 sleep_us((uint32_t)wait);
             } else {
                 // мы опоздали — не пытаемся догонять прошлое

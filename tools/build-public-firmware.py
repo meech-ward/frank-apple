@@ -8,6 +8,7 @@ import argparse
 import os
 from pathlib import Path
 import subprocess
+import sys
 root=Path(__file__).resolve().parents[1]
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--board',choices=['pico','tufty','all'],default='all')
@@ -27,3 +28,4 @@ for board in (['pico','tufty'] if args.board=='all' else [args.board]):
   if board=='tufty':options+=['-DPSRAM_SPEED=84']
   subprocess.run(['cmake','-S',str(root),'-B',str(build),'-G','Ninja',*options],check=True,env=env)
   subprocess.run(['ninja','-C',str(build),'-j',str(args.jobs)],check=True,env=env)
+  subprocess.run([sys.executable,str(root/'tools/check-driver-build.py'),str(build)],check=True,env=env)

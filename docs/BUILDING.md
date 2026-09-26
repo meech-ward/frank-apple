@@ -41,6 +41,8 @@ The helper selects 252 MHz, PWM audio, TLS verification, and local web control;
 PS/2 is disabled. Tufty uses the 84 MHz PSRAM setting; Pico uses no PSRAM. The
 CMake options remain available for custom builds. Network credentials are read
 at startup from `/wifi.ini`; no secrets file is imported at compile time.
+After linking, the helper checks the active source/header dependencies and link
+map to ensure the retired USB, PS/2, and memory drivers were not pulled in.
 
 ## Host tests
 
@@ -53,7 +55,17 @@ python3 tools/check-wifi-config.py
 python3 tools/check-video-mixed.py
 python3 tools/check-cpu-bus.py
 node tools/check-guide.mjs
+python3 tools/check-disk-library.py
+python3 tools/check-web-upload.py
+python3 tools/check-clean-package.py
+python3 tools/check-board-memory.py
+python3 tools/check-usb-input.py
 ```
+
+The USB check uses HID definitions from `PICO_SDK_PATH`'s TinyUSB checkout;
+it compiles the actual report callbacks and Apple input adapter on the host.
+Memory tests cover timing and chip-capacity parsing; they cannot exercise a
+physical memory chip. See [EXTERNAL_MEMORY.md](EXTERNAL_MEMORY.md).
 
 Optional live checks:
 

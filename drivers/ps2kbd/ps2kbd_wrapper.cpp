@@ -5,6 +5,7 @@
 
 #include "../../src/board_config.h"
 #include "ps2kbd_wrapper.h"
+#include "input_controls.h"
 #include "ps2kbd_mrmltr.h"
 #include <queue>
 
@@ -15,9 +16,6 @@ struct KeyEvent {
 
 static std::queue<KeyEvent> event_queue;
 
-bool turbo_latched = false;   // Scroll Lock toggled
-bool turbo_momentary = false; // F12 held
-bool show_speed = false; // F9 toggled
 static uint32_t numpad_state = 0;
 
 bool __not_in_flash() ps2kbd_is_turbo(void) {

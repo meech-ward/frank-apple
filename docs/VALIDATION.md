@@ -27,8 +27,30 @@ The disk-library addition also passes all four firmware builds and:
 - Generated empty FAT16 volumes mounted and written by the real FatFs library.
   Packaging verifies the complete UF2 payload against its firmware/data inputs.
 
-**Physical-device validation of these latest networking and disk-import changes
-is pending.** Neither board was reachable during the disk-import work.
+The permissive driver replacement also passes all four firmware builds and:
+
+- USB tests using production callbacks and TinyUSB definitions: BASIC text,
+  shifted punctuation, control keys, Return, navigation/menu, speed/turbo,
+  keypad directions, Apple buttons, reset, generic reports and gamepad mapping.
+  Modifier snapshots, stable releases, unplug cleanup and queue-overflow recovery
+  are checked with ASan/UBSan.
+- PSRAM timing and capacity tests with ASan/UBSan, including over 2,000 valid
+  clock combinations and invalid/unknown chip IDs. The 252/84 MHz settings match
+  the pinned Raspberry Pi timing implementation.
+- Active compilation-source/header and final link-map checks: the retired
+  USB wrapper, PS/2 library and PSRAM init/allocator are absent in all four
+  supported profiles. CI/build scripts enforce those exclusions.
+- Tufty disassembly review: the direct-mode memory commands and their called
+  functions/literal pools execute from SRAM while flash access is unavailable.
+
+**Physical-device validation of these latest networking, disk-import and driver
+changes is pending.** Neither board was connected during the replacement work.
+The USB implementation supports one shared keyboard state and standard keyboard
+reports; arbitrary NKRO layouts and independent simultaneous keyboards are not
+implemented. Hardware checks must cover cold/warm boots, a full memory test,
+flash writes while disk caches occupy PSRAM, disk SAVE/reload across power cycles,
+and physical keyboard typing/repeat/unplug on each board. See
+[EXTERNAL_MEMORY.md](EXTERNAL_MEMORY.md) for the memory acceptance sequence.
 Host TLS tests use the computer's transport, not the RP2350 radio/lwIP stack.
 Firmware is provided as source for testing; no newly validated hardware release
 is claimed. CI builds do not test physical hardware either.
