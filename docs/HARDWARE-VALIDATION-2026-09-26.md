@@ -114,32 +114,36 @@ repeated successfully after BASIC was ready. Cause of that additional restart
 has not been established. Evidence: `power-cycle-console.log`,
 `power-cycle-events.jsonl`, `power-cycle-load.log`, `power-test-status.json`.
 
-Web control starts off after reset. The user has been asked to press HOME, C,
-HOME to test physical buttons and re-enable it, and to confirm the screen and
-powered USB-C keyboard setup. Those responses are still pending. Removal of
+Web control starts off after reset. The user confirmed the physical display
+looked normal and successfully ran a program through the web UI. Removal of
 power while a disk write is active has not been tested.
 
-## Remaining acceptance checks
-- Finish any planned display, audio and physical-button interactions; no new
-  pass for those controls is inferred from HTTP or console success.
-- Test USB host keyboard typing, repeat, modifiers, unplug and gamepad behavior
-  on a keyboard profile with the corresponding physical peripherals. Console
-  testing cannot substitute for that check.
-- Physical Pico 2 W profile testing remains separate from this Tufty session.
+## Physical keyboard follow-up
 
-The user subsequently confirmed that the screen looked normal and a program ran
-through the web UI. The badge's keyboard-host firmware has now been flashed with
-picotool verification; physical keyboard typing is still awaiting the user.
-Its prepared ELF SHA-256 matches the loaded image, and the firmware-only write
-preserves Wi-Fi and disk data. The program previously in RAM was saved separately.
+The keyboard-host firmware was loaded with picotool verification. Its prepared
+ELF SHA-256 matches the loaded image, and only firmware was written; Wi-Fi and
+disk data were preserved. The program previously in RAM was saved separately.
 The first load encountered a communication error; the retry verified completely.
 Post-write USB visibility disappeared before a separate info/reboot command could
 run, so the user was instructed to tap RESET after connecting the powered keyboard.
+
+The user was then asked to type `PRINT 2+2` and press Return on the physical
+keyboard. They replied “works prefectly”, confirming the basic typing, arithmetic
+and Return test. This is a user-observed hardware pass on the replacement USB
+adapter, not a simulated input result. A final read-only web-state request was
+unavailable, so no independent remote screen capture of this result is claimed.
+The keyboard firmware is left installed. HOME is the BOOT button for recovery.
 Evidence: `flash-keyboard-retry.log`, `keyboard-image-info.txt`,
-`keyboard-test-status.json`. HOME is the BOOT button for future recovery.
+`keyboard-test-status.json` and the user confirmation in this conversation.
+
+## Remaining coverage
+
+- Extended physical keyboard repeat, modifier combinations, unplug/replug and
+  gamepad behavior remain covered by host tests only in this session.
+- Audio and a full physical-button matrix were not separately exercised.
+- Physical Pico 2 W profile testing remains separate from this Tufty session.
+
 The original full-device backup and final data-volume readback are retained
 locally with restricted file permissions. No GitHub push or release was performed.
-
-These remaining items need their own concrete evidence.
-The report is a bounded record of observed tests, not a claim that every feature
-or every hardware configuration has passed.
+The report records the observed tests rather than claiming every feature or
+hardware configuration has passed.

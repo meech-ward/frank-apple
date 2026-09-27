@@ -52,13 +52,16 @@ a full board reboot restored a saved BASIC program and HTTPS worked again.
 An empty-string bug found in the BASIC HTTP examples was fixed.
 See [the hardware report](HARDWARE-VALIDATION-2026-09-26.md) for exact scope.
 
-Physical USB host keyboard tests on the replacement adapter and Pico 2 W
-hardware tests remain pending, as does physical display/button/audio confirmation.
-A subsequent user power-cycle/reconnect restored a saved test program and Wi-Fi;
-see the hardware report for the exact sequence and startup observations. Two USB CDC debug descriptors
-became stale during testing; reopening restored monitoring while the web session
-remained live. The cause is not established. The console build excludes the
-USB host adapter, so this is not a host-keyboard result.
+The Tufty keyboard profile was subsequently flashed and verified. The user
+confirmed physical `PRINT 2+2` plus Return worked, and separately confirmed a
+normal display and a program running through the web UI. Extended physical
+keyboard repeat/modifier/unplug/gamepad checks, audio/button-matrix checks and
+Pico 2 W hardware testing remain outside this completed smoke test.
+A user power-cycle/reconnect also restored a saved test program and Wi-Fi;
+see the hardware report for the exact sequence and startup observations.
+Two USB CDC debug descriptors became stale during console testing; reopening
+restored monitoring while the web session remained live. The cause is not
+established, and the console build excludes the USB host adapter.
 
 The USB implementation supports one shared keyboard state and standard keyboard
 reports; arbitrary NKRO layouts and independent simultaneous keyboards are not
