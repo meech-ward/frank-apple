@@ -147,3 +147,19 @@ The original full-device backup and final data-volume readback are retained
 locally with restricted file permissions. No GitHub push or release was performed.
 The report records the observed tests rather than claiming every feature or
 hardware configuration has passed.
+
+
+## Power-button follow-up
+
+The Tufty keyboard build with early-boot power-button handling was flashed and
+byte-verified after a complete private 16 MiB backup. Only firmware was written;
+the existing disk volume and Wi-Fi configuration were preserved. The application
+reboot command succeeded. The user then confirmed: “yes turns off and back on”
+in response to the two-second RESET hold / short RESET wake test.
+
+The power change and synchronized browser HTTP starter samples passed all four
+firmware builds, eleven Python host checks and the browser-guide checks. The
+power driver runs before PSRAM, core 1 and peripherals start. RESET immediately
+ends the previous session, so save and finish disk activity before pressing it.
+This verifies visible shutdown and restart, not standby-current measurement or
+interrupted-write recovery. See [POWER.md](POWER.md) for controls and provenance.

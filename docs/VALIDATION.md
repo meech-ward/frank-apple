@@ -3,8 +3,10 @@
 **Tufty power-off addition:** all four firmware profiles build, and the
 production-driver host tests pass for short/long RESET, boot reasons, LED
 feedback, timer wrap, peripheral parking and power-transition failures.
-Physical shutdown/wake confirmation is pending; battery current is not measured.
-The earlier hardware results below predate this addition. See [POWER.md](POWER.md).
+The Tufty keyboard image was then flashed and byte-verified, preserving disk
+storage. The user confirmed that holding RESET turns it off and a short press
+turns it back on. Battery current is not measured. The broader hardware tests
+below predate this addition. See [POWER.md](POWER.md).
 
 Earlier revisions of both ports were exercised on physical boards: DOS boot,
 disk saves across resets, browser controls, VisiCalc, AppleWorks and keyboard
