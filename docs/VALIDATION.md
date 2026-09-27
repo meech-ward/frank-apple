@@ -43,17 +43,26 @@ The permissive driver replacement also passes all four firmware builds and:
 - Tufty disassembly review: the direct-mode memory commands and their called
   functions/literal pools execute from SRAM while flash access is unavailable.
 
-**Physical-device validation of these latest networking, disk-import and driver
-changes is pending.** Neither board was connected during the replacement work.
+**Tufty console hardware validation completed on 26 September 2026:** the
+8 MiB six-pass memory diagnostic, dirty-cache preservation across flash writes,
+DOS saves, byte-for-byte upload readback, VisiCalc calculation/save/load,
+AppleWorks 80-column editing and shortcuts, and live HTTP GET/POST/PUT/PATCH/DELETE
+plus error cases passed. The normal firmware was then flashed and verified;
+a full board reboot restored a saved BASIC program and HTTPS worked again.
+An empty-string bug found in the BASIC HTTP examples was fixed.
+See [the hardware report](HARDWARE-VALIDATION-2026-09-26.md) for exact scope.
+
+Physical USB host keyboard tests on the replacement adapter and Pico 2 W
+hardware tests remain pending, as do a true removal-of-power cold start and
+physical display/button/audio confirmation. Two USB CDC debug descriptors
+became stale during testing; reopening restored monitoring while the web session
+remained live. The cause is not established. The console build excludes the
+USB host adapter, so this is not a host-keyboard result.
+
 The USB implementation supports one shared keyboard state and standard keyboard
 reports; arbitrary NKRO layouts and independent simultaneous keyboards are not
-implemented. Hardware checks must cover cold/warm boots, a full memory test,
-flash writes while disk caches occupy PSRAM, disk SAVE/reload across power cycles,
-and physical keyboard typing/repeat/unplug on each board. See
+implemented. Host TLS and CI tests do not replace hardware testing. See
 [EXTERNAL_MEMORY.md](EXTERNAL_MEMORY.md) for the memory acceptance sequence.
-Host TLS tests use the computer's transport, not the RP2350 radio/lwIP stack.
-Firmware is provided as source for testing; no newly validated hardware release
-is claimed. CI builds do not test physical hardware either.
 
 Current limits include 1 KiB custom request headers, 1 KiB request bodies, 4 KiB
 responses, one outgoing request at a time and a 30-second deadline. HTTPS uses
