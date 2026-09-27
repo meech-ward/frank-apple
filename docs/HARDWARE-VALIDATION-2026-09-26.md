@@ -127,8 +127,16 @@ power while a disk write is active has not been tested.
   testing cannot substitute for that check.
 - Physical Pico 2 W profile testing remains separate from this Tufty session.
 
-The badge is at the Workshop BASIC prompt with the power-test result displayed.
-Web control is currently off, awaiting the physical button check.
+The user subsequently confirmed that the screen looked normal and a program ran
+through the web UI. The badge's keyboard-host firmware has now been flashed with
+picotool verification; physical keyboard typing is still awaiting the user.
+Its prepared ELF SHA-256 matches the loaded image, and the firmware-only write
+preserves Wi-Fi and disk data. The program previously in RAM was saved separately.
+The first load encountered a communication error; the retry verified completely.
+Post-write USB visibility disappeared before a separate info/reboot command could
+run, so the user was instructed to tap RESET after connecting the powered keyboard.
+Evidence: `flash-keyboard-retry.log`, `keyboard-image-info.txt`,
+`keyboard-test-status.json`. HOME is the BOOT button for future recovery.
 The original full-device backup and final data-volume readback are retained
 locally with restricted file permissions. No GitHub push or release was performed.
 
