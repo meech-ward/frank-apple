@@ -19,6 +19,7 @@
 
 #include "board_config.h"
 #include "../drivers/board_memory.h"
+#include "../drivers/board_memory_diagnostics.h"
 #include "../drivers/HDMI.h"
 #include "input_controls.h"
 #if ENABLE_PS2_KEYBOARD
@@ -412,6 +413,20 @@ static void process_serial_keyboard(void) {
     // following visible command as an empty line.
     if (c <= 0)
         return;
+#if BOARD_MEMORY_DIAGNOSTICS && PSRAM_MAX_FREQ_MHZ
+    // Diagnostic-only console keys: arm a dirty cache sentinel, then check it
+    // after a real DOS SAVE or browser disk upload. Never consume these in a
+    // normal firmware build or write over the two live disk-cache buffers.
+    if (c == 0x1E) {
+        printf("PSRAM SENTINEL arm=%s\n",
+            external_memory_diagnostic_prepare_sentinel() ? "READY" : "INCONCLUSIVE");
+        return;
+    }
+    if (c == 0x1F) {
+        (void)external_memory_diagnostic_verify_sentinel();
+        return;
+    }
+#endif
     if (c == 3 && !disk_ui_is_visible()) {
         remote_control_key(3);
         return;
@@ -814,6 +829,13 @@ int main() {
     if (psram[0] != 0xAB || psram[1] != 0xCD || psram[2] != 0xEF) {
         MII_DEBUG_PRINTF("ERROR: PSRAM read/write failed!\n");
     }
+#if BOARD_MEMORY_DIAGNOSTICS
+    // Give the USB console time to reconnect so the complete diagnostic log
+    // can be captured. This build tests PSRAM before disk caches/core1 exist.
+    sleep_ms(1800);
+    if (!external_memory_diagnostic_boot())
+        panic("PSRAM full-memory diagnostic failed");
+#endif
 #endif
     
     // IMPORTANT: Set buffer and resolution BEFORE graphics_init()

@@ -89,6 +89,12 @@ option(PS2_KEYBOARD_ENABLED "Enable legacy PS/2 keyboard input" ${PS2_DEFAULT})
 # Verbose debug logging toggle
 option(DEBUG_LOGS_ENABLED "Enable verbose debug logging" OFF)
 
+# Optional hardware acceptance build. Never enabled by the public build helper.
+option(BOARD_MEMORY_DIAGNOSTICS "Test all PSRAM at boot and expose console sentinel checks" OFF)
+if(BOARD_MEMORY_DIAGNOSTICS AND (NOT PSRAM_SPEED OR USB_HID_ENABLED))
+    message(FATAL_ERROR "BOARD_MEMORY_DIAGNOSTICS requires PSRAM and the USB console profile")
+endif()
+
 option(NETCARD_ENABLED "Virtual WiFi network card in slot 1" OFF)
 option(NETCARD_TLS "HTTPS for the network card" OFF)
 option(NETCARD_TLS_VERIFY "Verify server TLS certificates with bundled CA roots" ON)
@@ -197,6 +203,9 @@ if (PSRAM_SPEED)
         drivers/board_memory.c
     )
 endif()
+if(BOARD_MEMORY_DIAGNOSTICS)
+    list(APPEND DRIVER_SOURCES drivers/board_memory_diagnostics.c)
+endif()
 
 if (VIDEO_HDMI)
     list(APPEND DRIVER_SOURCES drivers/HDMI.c)
@@ -278,6 +287,11 @@ endif()
 target_link_libraries(drivers pico_stdlib hardware_dma hardware_pio hardware_spi hardware_pwm)
 if(PSRAM_SPEED)
     target_link_libraries(drivers hardware_flash hardware_clocks hardware_sync)
+endif()
+if(BOARD_MEMORY_DIAGNOSTICS)
+    target_compile_definitions(drivers PRIVATE BOARD_MEMORY_DIAGNOSTICS=1)
+    target_compile_definitions(${BUILD_NAME} PRIVATE BOARD_MEMORY_DIAGNOSTICS=1)
+    target_link_libraries(drivers hardware_xip_cache)
 endif()
 
 target_include_directories(${BUILD_NAME} PRIVATE

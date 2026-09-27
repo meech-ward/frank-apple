@@ -52,3 +52,23 @@ validate physical signal timing or flash-write behavior on a board.
 Hardware acceptance still requires cold and warm boot, disk-buffer/cache
 read/write checks, and a flashdisk write followed by PSRAM data verification
 on the intended board. No hardware test or flashing is implied by these checks.
+
+## Optional physical diagnostic build
+
+`-DBOARD_MEMORY_DIAGNOSTICS=ON` requires PSRAM and USB console mode. Use a
+separate build directory; the public firmware helper explicitly disables it.
+At boot, before disk caches or core 1 start, it writes and verifies six patterns
+across the detected memory capacity using the uncached CS1 window. This erases
+only volatile PSRAM, not flash or saved disks. Each pass reports checked words
+and failures; any failure stops startup. USB capture should be open at reboot.
+
+For flash/cache preservation, console byte `0x1E` arms a 4 KiB sentinel in the
+otherwise unused last page of PSRAM. `pending_words` must be nonzero and
+`arm=READY` must appear for the cache part of the check to be meaningful. Perform
+a real DOS SAVE or browser disk upload and wait for it to finish, then send
+`0x1F`. Verification reads uncached physical PSRAM without cleaning the cache
+first; it must print `PSRAM SENTINEL PASS`. The reserved region is outside both
+floppy buffers. This diagnostic must be reviewed if PSRAM allocation changes.
+
+Restore the normal console firmware after these tests. The normal build has no
+full-memory startup test, reserved sentinel, or additional console commands.
