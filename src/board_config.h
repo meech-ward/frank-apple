@@ -278,7 +278,7 @@ static inline uint get_psram_pin(void) {
 #define CASE_LED_MASK 0x0Fu
 
 // Power
-#define POWER_EN_PIN    41   // hold high so the badge stays on when running from the LiPo
+#define POWER_EN_PIN    41   // switched peripheral rail; core power is controlled by POWMAN
 #define VBUS_DETECT_PIN 12
 #define VBAT_SENSE_PIN  40
 

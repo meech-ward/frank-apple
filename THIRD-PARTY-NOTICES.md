@@ -38,6 +38,10 @@ separately. This repository must not be treated as uniformly MIT-licensed.
   parallel display driver and badge definitions are adapted from this project.
   [MIT notice](licenses/Pimoroni-Tufty-MIT.txt). The board header retains its
   Raspberry Pi BSD-3-Clause notice.
+- **Pimoroni Badgeware C++ power support**: the Tufty power driver adapts the
+  GPIO/USB/POWMAN sequence from the MIT-licensed `pimoroni/badgeware-cpp` project.
+  See [pinned source, changes and scope](docs/POWER.md) and the retained
+  [Pimoroni MIT notice](licenses/Pimoroni-Tufty-MIT.txt).
 - **Pimoroni Pico libraries**: https://github.com/pimoroni/pimoroni-pico — ST7789
   initialization used by the SPI display driver.
   [MIT notice](licenses/Pimoroni-Pico-MIT.txt).

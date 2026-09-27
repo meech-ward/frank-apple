@@ -1,5 +1,11 @@
 # Validation and current limits
 
+**Tufty power-off addition:** all four firmware profiles build, and the
+production-driver host tests pass for short/long RESET, boot reasons, LED
+feedback, timer wrap, peripheral parking and power-transition failures.
+Physical shutdown/wake confirmation is pending; battery current is not measured.
+The earlier hardware results below predate this addition. See [POWER.md](POWER.md).
+
 Earlier revisions of both ports were exercised on physical boards: DOS boot,
 disk saves across resets, browser controls, VisiCalc, AppleWorks and keyboard
 input. The first-command UART break bug was fixed and physical PRINT 2+2 was

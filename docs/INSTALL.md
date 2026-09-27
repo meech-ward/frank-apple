@@ -34,6 +34,10 @@ when backing up or replacing SD files.
 
 ## Tufty 2350
 
+To turn it off, save your work and wait for disk activity to finish, then hold
+**RESET for about two seconds**. Release it when the rear LEDs go out. A short
+RESET press turns it on again. See [power controls and save behavior](POWER.md).
+
 Hold HOME (the badge’s BOOT button), tap RESET, release HOME, and copy the Tufty-specific `.uf2` to the
 bootloader drive. This updates the first 4 MiB and preserves the data volume.
 An existing Apple II volume continues to work. A freshly wiped badge also needs

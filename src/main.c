@@ -18,6 +18,9 @@
 #include "hardware/dma.h"  // Include DMA header early before mii_sw.h
 
 #include "board_config.h"
+#ifdef BOARD_TUFTY
+#include "tufty_power.h"
+#endif
 #include "../drivers/board_memory.h"
 #include "../drivers/board_memory_diagnostics.h"
 #include "../drivers/HDMI.h"
@@ -754,9 +757,12 @@ static bool __not_in_flash_func() timer_callback(repeating_timer_t *rt) {
 #endif
 
 int main() {
+#ifdef BOARD_TUFTY
+    tufty_power_boot_check();  // before any peripheral, PSRAM or second core starts
+#endif
     mutex_init(&video_mutex);
 #ifdef BOARD_TUFTY
-    tufty_board_early_init();   // POWER_EN first: keeps the badge alive on battery
+    tufty_board_early_init();   // enable the switched peripheral rail
 #endif
     // Overclock support: For speeds > 252 MHz, increase voltage first
 #if CPU_CLOCK_MHZ > 252
