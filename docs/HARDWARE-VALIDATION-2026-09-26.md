@@ -98,10 +98,28 @@ The cleaned volume prefix was restored and flash-verified; the final library
 listing confirms those temporary files are absent, and the saved program still runs.
 The small DOS and VisiCalc files named `DRVQA926` remain as reproducible test results.
 
-## Remaining acceptance checks
+## User power-cycle follow-up
 
-- A true removal-of-power cold start and abrupt-power-loss test remain unperformed;
-  the successful whole-board reboot was software initiated.
+After being asked to remove USB/battery power, wait five seconds and reconnect,
+the user reported “plugged”. The capture recorded disconnection/reconnection and
+a full startup, PSRAM initialization and Workshop autoboot. After BASIC was ready,
+`NEW`, `LOAD POWERQA926`, `HOME`, `RUN` restored `POWER CHECK PASSED` and `56`.
+This verifies the saved program after the requested user power-cycle sequence;
+the earlier normal-firmware check used a software reboot.
+
+Wi-Fi reconnected. A later captured startup needed automatic join retries before
+connecting; no credentials or firmware changes were required. One serial load
+attempt was interrupted by a USB disconnect during a fresh startup; it was
+repeated successfully after BASIC was ready. Cause of that additional restart
+has not been established. Evidence: `power-cycle-console.log`,
+`power-cycle-events.jsonl`, `power-cycle-load.log`, `power-test-status.json`.
+
+Web control starts off after reset. The user has been asked to press HOME, C,
+HOME to test physical buttons and re-enable it, and to confirm the screen and
+powered USB-C keyboard setup. Those responses are still pending. Removal of
+power while a disk write is active has not been tested.
+
+## Remaining acceptance checks
 - Finish any planned display, audio and physical-button interactions; no new
   pass for those controls is inferred from HTTP or console success.
 - Test USB host keyboard typing, repeat, modifiers, unplug and gamepad behavior
@@ -109,7 +127,8 @@ The small DOS and VisiCalc files named `DRVQA926` remain as reproducible test re
   testing cannot substitute for that check.
 - Physical Pico 2 W profile testing remains separate from this Tufty session.
 
-The badge is left at the Workshop BASIC prompt with web control enabled.
+The badge is at the Workshop BASIC prompt with the power-test result displayed.
+Web control is currently off, awaiting the physical button check.
 The original full-device backup and final data-volume readback are retained
 locally with restricted file permissions. No GitHub push or release was performed.
 

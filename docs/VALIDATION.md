@@ -53,8 +53,9 @@ An empty-string bug found in the BASIC HTTP examples was fixed.
 See [the hardware report](HARDWARE-VALIDATION-2026-09-26.md) for exact scope.
 
 Physical USB host keyboard tests on the replacement adapter and Pico 2 W
-hardware tests remain pending, as do a true removal-of-power cold start and
-physical display/button/audio confirmation. Two USB CDC debug descriptors
+hardware tests remain pending, as does physical display/button/audio confirmation.
+A subsequent user power-cycle/reconnect restored a saved test program and Wi-Fi;
+see the hardware report for the exact sequence and startup observations. Two USB CDC debug descriptors
 became stale during testing; reopening restored monitoring while the web session
 remained live. The cause is not established. The console build excludes the
 USB host adapter, so this is not a host-keyboard result.
