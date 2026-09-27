@@ -34,7 +34,7 @@ when backing up or replacing SD files.
 
 ## Tufty 2350
 
-Hold BOOT, tap RESET, release BOOT, and copy the Tufty-specific `.uf2` to the
+Hold HOME (the badge’s BOOT button), tap RESET, release HOME, and copy the Tufty-specific `.uf2` to the
 bootloader drive. This updates the first 4 MiB and preserves the data volume.
 An existing Apple II volume continues to work. A freshly wiped badge also needs
 a 12 MiB FAT16 volume at flash offset 4 MiB; firmware alone does not create it.
@@ -64,7 +64,7 @@ picotool uf2 convert apple-data.img -t bin apple-data.uf2 --offset 0x10400000 --
 The final Wi-Fi argument is optional. The helper places disks in `/apple` and
 Wi-Fi settings at `/wifi.ini`. Include `autoboot.txt` in your disk directory if
 wanted. Copy `apple-data.uf2` onto the badge's bootloader drive, entering
-BOOT + RESET again if the firmware upload already restarted it.
+HOME + RESET again if the firmware upload already restarted it.
 
 **Replacing this data image replaces existing saved programs.** Back up first.
 For an existing badge, prefer a firmware-only update. The browser library adds disks without replacing the volume. There is no USB
