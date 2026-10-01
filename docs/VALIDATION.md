@@ -108,5 +108,5 @@ after snapshot failures, Back/wrap navigation, stop, web toggle and disk access.
 
 **Physical validation of this new launcher is pending.** No badge was attached
 in bootloader mode while the update was prepared. The September 26 physical
-keyboard and power tests below describe that earlier build, not a new physical
+keyboard and power tests above describe that earlier build, not a new physical
 test of this firmware. See [button controls and limits](BUTTON-LAUNCHER.md).

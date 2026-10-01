@@ -993,6 +993,7 @@ bool disk_ui_handle_key(uint8_t key) {
                 handled = disk_ui_delete_selected_file();
                 break;
             }
+            break;
         case '1':
             if (ui_state == DISK_UI_SELECT_DRIVE) {
                 selected_drive = 0;
@@ -1165,7 +1166,7 @@ void disk_ui_render(uint8_t *framebuffer, int width, int height) {
         
     } else if (state == DISK_UI_SELECT_FILE) {
         // File selection
-        char title[32];
+        char title[48];
         snprintf(title, sizeof(title), " Drive %d - Select Disk ", drive + 1);
         draw_header(framebuffer, width, UI_X, UI_Y, UI_WIDTH, title);
         int base = has_parent_dir ? 1 : 0;
