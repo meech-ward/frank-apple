@@ -1,7 +1,7 @@
 # Use the badge without a keyboard
 
 Press **HOME** to pause the Apple II and open its launcher. **Up/down** choose
-an item, **A** selects it, and **B** goes back. HOME closes the menu and resumes
+an item, **A** goes back, and **B** or **C** selects it. HOME closes the menu and resumes
 the same session. A keyboard's equivalents are F11, arrow keys, Return and Escape.
 
 The menu offers:
@@ -13,12 +13,16 @@ The menu offers:
 - **Run program in memory**: the equivalent of typing `RUN` at the BASIC prompt.
 - **Stop program (Ctrl-C)**: send Control-C, the usual BASIC stop key.
 - **Choose a disk**: the existing disk menu. Boot a game/application disk, or
-  insert a disk when an application asks. Up/down, A and B work here too.
+  insert a disk when an application asks. The same button controls work here too.
+- **Web control: OFF/ON**: select this item with B or C to toggle the local
+  web page. Its address appears below the menu.
 
-**C** toggles local web control on the HOME screen. Its address is displayed
-there. In Saved programs, C refreshes the list; on the disk action screen it
-toggles read-only. Each screen shows the relevant controls. Web control still
-starts off after a restart. RESET power-off and USB keyboard support are unchanged.
+**A always backs out; B and C both select** throughout the launcher and disk
+menus. Read-only is a selectable item on the disk action screen. To refresh
+Saved programs, go back with A and open the list again. A keyboard's Space
+shortcut still toggles web control at HOME, refreshes Saved programs, and toggles
+read-only on the disk action screen. Web control starts off after a restart.
+RESET power-off and USB keyboard support are unchanged.
 
 ## Save once, launch later
 
@@ -43,20 +47,21 @@ or the web controls to return to text BASIC in those cases.
 
 ## Programs that use the front buttons
 
-Outside the menu, the buttons retain their Apple keystrokes:
+Outside the menu, A sends Escape, B Return, and C Right, following the same
+back/select/forward arrangement:
 
 | Button | Apple key / `ASC` value |
 | --- | --- |
 | Up | Up arrow / 11 |
 | Down | Down arrow / 10 |
-| A | Return / 13 |
-| B | Escape / 27 |
-| C | Space / 32 |
+| A | Escape / 27 |
+| B | Return / 13 |
+| C | Right arrow / 21 |
 
 See [`basic/button-counter.bas`](../basic/button-counter.bas) for a small example
 using all five. Enter it with the keyboard or web editor and save it as
 `BUTTON COUNTER`. Once saved, launch it from the badge menu. Up/down change the
-counter, A zeroes it, C adds ten, and B exits to BASIC. Existing games still need
+counter, A exits to BASIC, B zeroes it, and C adds ten. Existing games still need
 their own supported keys; these buttons do not replace a full keyboard or joystick.
 
 ## Scope and checks
@@ -73,6 +78,7 @@ added to the clean installer.
 catalog corruption, command delimiters, all sector orders, circular tracks and
 unaligned disk writes. Optionally pass a private `.bdsk` to inspect a saved disk.
 `tools/check-launcher.py` exercises the production menu and renderer with simulated
-storage/input: navigation, run/load, prompt guard, stop, web control, snapshot
+storage/input: physical-button and keyboard navigation, run/load, prompt guard,
+stop, selectable web control/read-only, snapshot
 failures and preservation of Apple RAM. An optional directory receives screen
 renders. Host tests do not establish a physical button/launch pass.

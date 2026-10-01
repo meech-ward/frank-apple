@@ -106,7 +106,18 @@ list, Run/Load actions, unavailable BASIC prompt and unreadable catalog.
 The menu harness checks unchanged Apple RAM after closing, blocked commands
 after snapshot failures, Back/wrap navigation, stop, web toggle and disk access.
 
-**Physical validation of this new launcher is pending.** No badge was attached
-in bootloader mode while the update was prepared. The September 26 physical
-keyboard and power tests above describe that earlier build, not a new physical
-test of this firmware. See [button controls and limits](BUTTON-LAUNCHER.md).
+The user subsequently confirmed browsing the saved-program catalog and running
+a program using the badge buttons. The September 26 keyboard and power tests
+above describe that earlier build. See [button controls and limits](BUTTON-LAUNCHER.md).
+
+## Button arrangement follow-up — 2026-10-01
+
+The revised arrangement uses A for Back and B/C for Select throughout the menus.
+Web control and disk Read-only are selectable rows. Outside the menus, A sends
+Escape, B Return and C Right. The production menu harness exercises the actual
+button mapping through catalog Run/Load, cancel/back, web toggles and read-only
+changes (including ensuring that toggling a setting does not mount a disk).
+Menu rendering and the browser guide are checked too.
+
+**Physical validation of this revised arrangement is pending.** The user's
+successful catalog/launch test used the previous button mapping.

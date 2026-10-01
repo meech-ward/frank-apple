@@ -454,12 +454,10 @@ static void process_serial_keyboard(void) {
 #ifdef BOARD_TUFTY
 // Tufty 2350 badge: power latch, case LEDs, and the six buttons. HOME opens and
 // closes the launcher (same as F11 / console Ctrl-]); while the menu is open
-// UP/DOWN move, A is Enter, B is Esc, C is the screen's Space shortcut. With the
-// menu closed the same buttons type into the Apple: up/down arrows, Return,
-// Esc, space, so a game or a prompt can be driven with no keyboard attached.
-enum { TB_HOME, TB_UP, TB_DOWN, TB_A, TB_B, TB_C, TB_COUNT };
+// UP/DOWN move, A is Back, and B/C select. With the menu closed the buttons
+// type into the Apple: up/down arrows, Esc, Return, Right.
+#include "tufty_buttons.h"
 static const uint8_t tufty_btn_pin[TB_COUNT] = { BTN_HOME_PIN, BTN_UP_PIN, BTN_DOWN_PIN, BTN_A_PIN, BTN_B_PIN, BTN_C_PIN };
-static const uint8_t tufty_btn_key[TB_COUNT] = { 0, 0x0B, 0x0A, 0x0D, 0x1B, ' ' };
 
 static void tufty_board_early_init(void) {
     gpio_init(POWER_EN_PIN);
@@ -474,13 +472,14 @@ static void tufty_board_early_init(void) {
 }
 
 static void tufty_button_emit(int i) {
-    uint8_t key = tufty_btn_key[i];
     if (i == TB_HOME) {
         do { __dmb(); } while (video_core_iteration_in_progress);
         disk_ui_toggle();
         return;
     }
-    if (disk_ui_is_visible()) {
+    bool menu_visible = disk_ui_is_visible();
+    uint8_t key = tufty_button_key(i, menu_visible);
+    if (menu_visible) {
         disk_ui_handle_key(key);
     } else {
         typing_push_raw(&key, 1);

@@ -3,6 +3,7 @@
 #include "disk_ui.h"
 #include "disk_loader.h"
 #include "typing.h"
+#include "tufty_buttons.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -15,7 +16,9 @@ disk_entry_t *g_disk_list=(disk_entry_t *)vram;
 int g_disk_count;
 loaded_disk_t g_loaded_disks[2];
 static bool ready=true,fail_save,fail_restore,web;
-static int catalog_count=15,stopped,scan_calls;
+static int catalog_count=15,stopped,scan_calls,mounted;
+static bool mounted_read_only;
+static int mounted_preserve;
 static char typed[128],screen[4096];
 
 FRESULT f_open(FIL *f,const char *name,unsigned mode) { (void)f;(void)name;(void)mode;return 0; }
@@ -55,7 +58,8 @@ int disk_saved_programs(mii_t *m,dos_program_t *p,size_t n) {
 }
 int disk_load_image(int d,int i,bool w) { (void)d;(void)i;(void)w;return 0; }
 int disk_mount_to_emulator(int d,mii_t *m,int s,int p,bool r,bool b) {
-    (void)d;(void)m;(void)s;(void)p;(void)r;(void)b;return 0;
+    (void)d;(void)m;(void)s;(void)b;
+    mounted++;mounted_read_only=r;mounted_preserve=p;return 0;
 }
 int disk_eject_from_emulator(int d,mii_t *m,int s) { (void)d;(void)m;(void)s;return 0; }
 void disk_unload_image(int d) { (void)d; }
@@ -67,6 +71,7 @@ static void expect(const char *s) {
     disk_ui_render(framebuffer,320,240); // ASan also checks every state render.
 }
 static void key(uint8_t k) { assert(disk_ui_handle_key(k)); }
+static void button(unsigned b) { key(tufty_button_key(b,true)); }
 static void open_home(void) {
     memset(vram,0x6d,sizeof(vram)); typed[0]=0;
     disk_ui_show();assert(disk_ui_is_visible());expect("APPLE II");
@@ -102,7 +107,7 @@ int main(int argc,char **argv) {
     ready=true;open_home();key(0x0a);key(0x0a);key('\r');assert(!strcmp(typed,"RUN\r"));
     catalog_count=0;open_home();programs_menu();expect("No Applesoft programs");key('\r');assert(!typed[0]);
     catalog_count=-1;key(' ');expect("could not be read");render_file(images,"no-dos");
-    key(0x1b);key(0x0b);key(0x0b);key('\r');expect("CHOOSE A DISK DRIVE");
+    key(0x1b);key(0x0b);key(0x0b);key(0x0b);key('\r');expect("CHOOSE A DISK DRIVE");
     key(0x1b);expect("APPLE II");key('2');expect("CHOOSE A DISK FOR DRIVE 2");
     key(0x1b);key(0x1b);key(0x1b);assert(!disk_ui_is_visible());
     fail_save=true;memset(vram,0x6d,sizeof(vram));int scans=scan_calls;
@@ -110,5 +115,37 @@ int main(int argc,char **argv) {
     catalog_count=15;open_home();programs_menu();key('\r');fail_restore=true;key('\r');
     assert(disk_ui_is_visible()&&!typed[0]);fail_restore=false;key(0x1b);key(0x1b);key(0x1b);
     assert(!disk_ui_is_visible());
-    puts("Launcher: navigation, run/load, prompt guard, stop, web toggle, disk access, RAM preservation and snapshot failures PASS");
+
+    // Exercise the same physical-button mapping called by main.c. C must
+    // select, never toggle web/read-only or refresh instead of opening a file.
+    web=false;open_home();button(TB_C);assert(!disk_ui_is_visible()&&!web);
+    open_home();button(TB_UP);expect("> Web control: OFF");
+    button(TB_B);expect("> Web control: ON");assert(web);
+    button(TB_C);assert(!web);button(TB_A);assert(!disk_ui_is_visible());
+    open_home();button(TB_DOWN);button(TB_B);expect("SAVED PROGRAMS");
+    button(TB_C);expect("SAVED PROGRAM\n");button(TB_A);expect("SAVED PROGRAMS");
+    button(TB_B);button(TB_C);assert(!strcmp(typed,"RUN DEMO 01,S6,D1\r")&&!web);
+    open_home();button(TB_DOWN);button(TB_C);button(TB_B);button(TB_DOWN);button(TB_B);
+    assert(!strcmp(typed,"LOAD DEMO 01,S6,D1\r"));
+
+    open_home();button(TB_UP);button(TB_UP);button(TB_B);expect("CHOOSE A DISK DRIVE");
+    render_file(images,"drives");
+    button(TB_DOWN);button(TB_B);expect("CHOOSE A DISK FOR DRIVE 2");
+    button(TB_DOWN);button(TB_C);expect("DISK ACTION");
+    expect("Read-only: OFF");assert(mounted==0);
+    button(TB_UP);expect("> Cancel");button(TB_C);expect("CHOOSE A DISK FOR DRIVE 2");
+    assert(mounted==0);
+    button(TB_B);button(TB_DOWN);button(TB_DOWN);expect("> Read-only: OFF");
+    button(TB_C);expect("> Read-only: ON");assert(mounted==0);
+    render_file(images,"disk-action");
+    button(TB_B);expect("> Read-only: OFF");assert(mounted==0);
+    button(TB_UP);expect("> Insert");button(TB_C);
+    assert(mounted==1&&!mounted_read_only&&mounted_preserve==1&&!disk_ui_is_visible());
+    open_home();button(TB_A);assert(!disk_ui_is_visible());
+    for(size_t i=0;i<sizeof(vram);i++)assert(vram[i]==0x6d);
+
+    assert(tufty_button_key(TB_UP,false)==11 && tufty_button_key(TB_DOWN,false)==10);
+    assert(tufty_button_key(TB_A,false)==27 && tufty_button_key(TB_B,false)==13);
+    assert(tufty_button_key(TB_C,false)==21);
+    puts("Launcher: button/keyboard navigation, run/load, prompt guard, stop, selectable web/read-only, disk access, RAM preservation and snapshot failures PASS");
 }

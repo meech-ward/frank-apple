@@ -37,7 +37,8 @@ static bool fb_needs_clear = true;
 static volatile disk_ui_state_t ui_state = DISK_UI_HIDDEN;
 static volatile int selected_drive = 0;      // 0 or 1
 static volatile int selected_file = 0;       // Currently highlighted file
-static volatile int selected_action = 0;     // 0=Boot, 1=Insert, 2=Cancel
+enum { DISK_BOOT, DISK_INSERT, DISK_READ_ONLY, DISK_CANCEL, DISK_ACTIONS };
+static volatile int selected_action = DISK_BOOT;
 static volatile int scroll_offset = 0;       // For scrolling long lists
 static volatile bool ui_dirty = false;       // True when UI needs redraw
 static volatile bool ui_rendered = false;    // True when UI has been rendered at least once
@@ -49,9 +50,19 @@ static const char *home_message;
 static const char *home_items[] = {
     "Resume Apple II", "Saved programs", "Run program in memory",
     "Stop program (Ctrl-C)", "Choose a disk"
+#if NETCARD_WEB_CONTROL
+    , "Web control"
+#endif
 };
-#define HOME_ITEMS 5
+#define HOME_ITEMS ((int)(sizeof(home_items) / sizeof(home_items[0])))
 #define PROGRAM_VISIBLE 12
+
+static const char *home_label(int item) {
+#if NETCARD_WEB_CONTROL
+    if (item == 5) return web_control_enabled() ? "Web control: ON" : "Web control: OFF";
+#endif
+    return home_items[item];
+}
 
 // With double-buffering, the render target alternates each frame.
 static uint8_t *g_last_framebuffer = NULL;
@@ -417,7 +428,7 @@ void disk_ui_show_loading(void) {
     ui_rendered = false;
 }
 
-static bool read_only = false;  // disks are writable unless you tick Read-only with SPACE; writes go to the .bdsk copy, the original image is never touched
+static bool read_only = false;  // toggle the Read-only item (or SPACE); writes go to the .bdsk copy, never the original image
 static bool bdsk_exists = false;
 static bool bdsk_recreate = false;
 #define has_parent_dir  (strcmp(selected_dir, "/") != 0)
@@ -435,12 +446,12 @@ size_t disk_ui_describe(char *out, size_t cap) {
     if (ui_state == DISK_UI_HOME) {
         MENU_TEXT("APPLE II\n\n");
         for (int i = 0; i < HOME_ITEMS; ++i)
-            MENU_TEXT("%c %s\n", i == home_item ? '>' : ' ', home_items[i]);
+            MENU_TEXT("%c %s\n", i == home_item ? '>' : ' ', home_label(i));
         MENU_TEXT("\n%s\n", home_message ? home_message : "Saved programs: DOS 3.3 / drive 1");
-        MENU_TEXT("UP/DOWN: choose  A/RETURN: select\nB/ESC: resume  HOME: resume\n");
+        MENU_TEXT("UP/DOWN: choose  B/C/RETURN: select\nA/ESC: resume  HOME: resume\n");
 #if NETCARD_WEB_CONTROL
         char address[48]; web_control_address(address, sizeof(address));
-        MENU_TEXT("\nC/SPACE: Web control %s\n%s\n", web_control_enabled() ? "ON" : "OFF", address);
+        MENU_TEXT("\n%s\nSPACE also toggles web control.\n", address);
 #endif
     } else if (ui_state == DISK_UI_PROGRAMS) {
         MENU_TEXT("SAVED PROGRAMS - DRIVE 1\n%.39s\n\n", g_loaded_disks[0].filename);
@@ -448,20 +459,20 @@ size_t disk_ui_describe(char *out, size_t cap) {
         else if (!program_count) MENU_TEXT("No Applesoft programs on this disk.\nCreate one in BASIC: SAVE MY PROGRAM\n");
         for (int i = program_scroll; i < program_count && i < program_scroll + PROGRAM_VISIBLE; ++i)
             MENU_TEXT("%c %s\n", i == program_item ? '>' : ' ', programs[i].name);
-        MENU_TEXT("\nA/RETURN: options  B/ESC: back\nC/SPACE: refresh  UP/DOWN: choose\n");
+        MENU_TEXT("\nB/C/RETURN: options  A/ESC: back\nReopen this list to refresh (or SPACE).\n");
     } else if (ui_state == DISK_UI_PROGRAM_ACTION) {
         MENU_TEXT("SAVED PROGRAM\n%s\n\n", programs[program_item].name);
         MENU_TEXT("Replaces the program in memory.\nSave your current work first.\n\n");
         if (!basic_ready) MENU_TEXT("Return to the empty ] BASIC prompt\nbefore loading a saved program.\n\n");
         const char *actions[] = {"Run program", "Load without running", "Back"};
         for (int i = 0; i < 3; ++i) MENU_TEXT("%c %s\n", i == program_action ? '>' : ' ', actions[i]);
-        MENU_TEXT("\nA/RETURN: select  B/ESC: back\n");
+        MENU_TEXT("\nB/C/RETURN: select  A/ESC: back\n");
     } else if (ui_state == DISK_UI_SELECT_DRIVE) {
         MENU_TEXT("CHOOSE A DISK DRIVE\n\n");
         for (int i = 0; i < 2; ++i)
             MENU_TEXT("%c DRIVE %d\n  %.36s\n\n", i == selected_drive ? '>' : ' ', i + 1,
                 g_loaded_disks[i].loaded ? g_loaded_disks[i].filename : "(empty)");
-        MENU_TEXT("UP/DOWN: choose   RETURN: open\nESCAPE: back to the Apple\n");
+        MENU_TEXT("UP/DOWN: choose   B/C/RETURN: open\nA/ESCAPE: back to launcher\n");
 #if NETCARD_WEB_CONTROL
         MENU_TEXT("\nSPACE toggles web control here.\n");
 #endif
@@ -473,14 +484,14 @@ size_t disk_ui_describe(char *out, size_t cap) {
             const char *name = base && i == 0 ? ".. (parent folder)" : g_disk_list[i - base].filename;
             MENU_TEXT("%c %.37s\n", i == selected_file ? '>' : ' ', name);
         }
-        MENU_TEXT("\nUP/DOWN: choose   RETURN: select\nESCAPE: back\n");
+        MENU_TEXT("\nUP/DOWN: choose   B/C/RETURN: select\nA/ESCAPE: back\n");
     } else if (ui_state == DISK_UI_SELECT_ACTION) {
         int index = selected_file - (has_parent_dir ? 1 : 0);
         MENU_TEXT("DISK ACTION\n%.39s\n\n", index >= 0 && index < g_disk_count ? g_disk_list[index].filename : "(no disk)");
-        MENU_TEXT("Read-only: %s (SPACE changes this)\n\n", read_only ? "ON" : "OFF");
-        const char *actions[] = {"Boot - start this disk", "Insert - keep current program", "Cancel"};
-        for (int i = 0; i < 3; ++i) MENU_TEXT("%c %s\n", i == selected_action ? '>' : ' ', actions[i]);
-        MENU_TEXT("\nBoot replaces the program in memory.\nUP/DOWN: choose   RETURN: do action\nESCAPE: back\n");
+        const char *actions[] = {"Boot - start this disk", "Insert - keep current program",
+            read_only ? "Read-only: ON" : "Read-only: OFF", "Cancel"};
+        for (int i = 0; i < DISK_ACTIONS; ++i) MENU_TEXT("%c %s\n", i == selected_action ? '>' : ' ', actions[i]);
+        MENU_TEXT("\nBoot replaces the program in memory.\nUP/DOWN: choose   B/C/RETURN: do action\nA/ESCAPE: back   SPACE: read-only\n");
     } else if (ui_state == DISK_UI_LOADING) {
         MENU_TEXT("LOADING DISK...\nPlease wait.\n");
     }
@@ -549,7 +560,7 @@ static bool handle_disk_loaded(void) {
     disk_ui_hide();
     if (disk_ui_is_visible()) return false;
     if (g_mii) {
-        int preserve_state = (selected_action == 1) ? 1 : 0;  // INSERT preserves state
+        int preserve_state = (selected_action == DISK_INSERT) ? 1 : 0;
         if (0 == disk_mount_to_emulator(
                 selected_drive,
                 g_mii,
@@ -561,7 +572,7 @@ static bool handle_disk_loaded(void) {
         ) {
             printf("Disk UI: disk mounted successfully\n");
             
-            if (selected_action == 0) {  // BOOT
+            if (selected_action == DISK_BOOT) {
                 // Remember the startup disk, not an application's later
                 // program/data-disk swap, which may not be bootable.
                 disk_autoboot_save(selected_drive);
@@ -608,7 +619,7 @@ bool disk_ui_mount_file(const char *name, int drive, bool boot) {
     int count=disk_scan_directory(selected_dir), index=-1;
     if(count>=0) for(int i=0;i<count;i++)
         if(g_disk_list[i].type!=DIR_TYPE && !strcmp(g_disk_list[i].filename,name)) { index=i; break; }
-    selected_drive=drive; selected_action=boot?0:1;
+    selected_drive=drive; selected_action=boot?DISK_BOOT:DISK_INSERT;
     read_only=false; bdsk_recreate=false;
     ui_state=DISK_UI_LOADING; ui_dirty=true;
     mutex_exit(&video_mutex);
@@ -688,6 +699,9 @@ static bool handle_launcher_key(uint8_t key) {
                     if (!disk_ui_is_visible()) { clear_held_key(); remote_control_key(3); }
                     break;
                 case 4: ui_state = DISK_UI_SELECT_DRIVE; break;
+#if NETCARD_WEB_CONTROL
+                case 5: web_control_toggle(); break;
+#endif
             }
         }
         // Keep the existing keyboard shortcuts to each disk drive.
@@ -832,8 +846,11 @@ bool disk_ui_handle_key(uint8_t key) {
                 // Proceed to action selection
             }
             if (ui_state == DISK_UI_SELECT_ACTION) {
-                if (selected_action == 2) {  // Cancel
+                if (selected_action == DISK_CANCEL) {
                     ui_state = DISK_UI_SELECT_FILE;
+                    ui_dirty = true;
+                } else if (selected_action == DISK_READ_ONLY) {
+                    read_only = !read_only;
                     ui_dirty = true;
                 } else {
                     // Boot or Insert - show loading screen and load disk
@@ -917,7 +934,7 @@ bool disk_ui_handle_key(uint8_t key) {
                 if (selected_action > 0) {
                     selected_action--;
                 } else {
-                    selected_action = 2;  // Wrap to Cancel
+                    selected_action = DISK_ACTIONS - 1;
                 }
                 ui_dirty = true;
             }
@@ -945,7 +962,7 @@ bool disk_ui_handle_key(uint8_t key) {
                     ui_dirty = true;
                 }
             } else if (ui_state == DISK_UI_SELECT_ACTION) {
-                if (selected_action < 2) {
+                if (selected_action < DISK_ACTIONS - 1) {
                     selected_action++;
                 } else {
                     selected_action = 0;  // Wrap to Boot
@@ -1066,19 +1083,17 @@ void disk_ui_render(uint8_t *framebuffer, int width, int height) {
         int y = content_y + 4;
         for (int i = 0; i < HOME_ITEMS; ++i, y += 16)
             draw_menu_item(framebuffer, width, content_x, y, content_width,
-                           home_items[i], max_chars, home_item == i);
+                           home_label(i), max_chars, home_item == i);
         y += 6;
         draw_string_truncated(framebuffer, width, content_x, y,
             home_message ? home_message : "Saved programs: DOS 3.3 / drive 1", max_chars, COLOR_TEXT);
 #if NETCARD_WEB_CONTROL
-        y += 24;
-        draw_string(framebuffer, width, content_x, y,
-            web_control_enabled() ? "C / Space: Web control ON" : "C / Space: Web control OFF", COLOR_TEXT);
+        y += 20;
         char address[48]; web_control_address(address, sizeof(address));
-        draw_string_truncated(framebuffer, width, content_x, y + 14, address, max_chars, COLOR_TEXT);
+        draw_string_truncated(framebuffer, width, content_x, y, address, max_chars, COLOR_TEXT);
 #endif
         draw_string(framebuffer, width, content_x, UI_Y + UI_HEIGHT - 16,
-            "HOME / B / Esc: resume Apple II", COLOR_TEXT);
+            "HOME / A / Esc: resume Apple II", COLOR_TEXT);
     } else if (state == DISK_UI_PROGRAMS) {
         draw_header(framebuffer, width, UI_X, UI_Y, UI_WIDTH, " Saved programs - Drive 1 ");
         int y = content_y;
@@ -1088,7 +1103,7 @@ void disk_ui_render(uint8_t *framebuffer, int width, int height) {
         if (program_count < 0) {
             draw_string(framebuffer, width, content_x, y, "Use a DOS 3.3 disk in drive 1.", COLOR_TEXT);
             draw_string(framebuffer, width, content_x, y+14, "This catalog could not be read.", COLOR_TEXT);
-            draw_string(framebuffer, width, content_x, y+40, "B: back, then Choose a disk.", COLOR_TEXT);
+            draw_string(framebuffer, width, content_x, y+40, "A: back, then Choose a disk.", COLOR_TEXT);
         } else if (!program_count) {
             draw_string(framebuffer, width, content_x, y, "No Applesoft programs on this disk.", COLOR_TEXT);
             draw_string(framebuffer, width, content_x, y+24, "Create one in BASIC, then:", COLOR_TEXT);
@@ -1102,7 +1117,7 @@ void disk_ui_render(uint8_t *framebuffer, int width, int height) {
                     content_y+20, PROGRAM_VISIBLE*LINE_HEIGHT, program_count, PROGRAM_VISIBLE, program_scroll);
         }
         draw_string(framebuffer, width, content_x, UI_Y+UI_HEIGHT-16,
-            "C / Space: refresh saved programs", COLOR_TEXT);
+            "Reopen list to refresh (or Space)", COLOR_TEXT);
     } else if (state == DISK_UI_PROGRAM_ACTION) {
         draw_header(framebuffer, width, UI_X, UI_Y, UI_WIDTH, " Saved program ");
         int y = content_y + 4;
@@ -1151,12 +1166,12 @@ void disk_ui_render(uint8_t *framebuffer, int width, int height) {
 #if NETCARD_WEB_CONTROL
         y += 30;
         draw_string(framebuffer, width, content_x, y,
-            web_control_enabled() ? "[C/Space] Web control: ON" : "[C/Space] Web control: OFF", COLOR_TEXT);
+            web_control_enabled() ? "Web control: ON" : "Web control: OFF", COLOR_TEXT);
         char address[48];
         web_control_address(address, sizeof(address));
         draw_string(framebuffer, width, content_x, y + 14, address, COLOR_TEXT);
         draw_string(framebuffer, width, content_x, y + 28, "Open on a phone or computer on this WiFi.", COLOR_TEXT);
-        draw_string(framebuffer, width, content_x, y + 42, "Turns off when the badge restarts.", COLOR_TEXT);
+        draw_string(framebuffer, width, content_x, y + 42, "Change Web control in the HOME menu.", COLOR_TEXT);
 #endif
         
         // Instructions below dialog border - clear area first
@@ -1246,12 +1261,8 @@ void disk_ui_render(uint8_t *framebuffer, int width, int height) {
         draw_string_truncated(framebuffer, width, content_x, y, file_label, max_chars, COLOR_TEXT);
         y += LINE_HEIGHT + 8;
 
-        // Read-only checkbox (drive state)
+        // Optional keyboard-only sidecar maintenance.
         char label[32];
-        snprintf(label, sizeof(label), "[%c] Read-only [SPACE]", read_only ? 'x' : ' ');
-        draw_string(framebuffer, width, content_x, y, label, COLOR_TEXT);
-        y += LINE_HEIGHT + 4;
-
         if (bdsk_exists) {
             snprintf(label, sizeof(label), "[%c] Recreate .bdsk [D]", bdsk_recreate ? 'x' : ' ');
             draw_string(framebuffer, width, content_x, y, label, COLOR_TEXT);
@@ -1271,7 +1282,10 @@ void disk_ui_render(uint8_t *framebuffer, int width, int height) {
         y += LINE_HEIGHT + 2;
         
         draw_menu_item(framebuffer, width, content_x + 10, y, content_width - 20,
-                      "Cancel", max_chars - 4, sel_action == 2);
+                      read_only ? "Read-only: ON" : "Read-only: OFF", max_chars - 4, sel_action == DISK_READ_ONLY);
+        y += LINE_HEIGHT + 2;
+        draw_menu_item(framebuffer, width, content_x + 10, y, content_width - 20,
+                      "Cancel", max_chars - 4, sel_action == DISK_CANCEL);
         
         // Instructions below dialog border - clear area first
         int footer_y = UI_Y + UI_HEIGHT + 4;
@@ -1279,11 +1293,15 @@ void disk_ui_render(uint8_t *framebuffer, int width, int height) {
         draw_string(framebuffer, width, content_x, footer_y, "[Up/Dn] Select  [Enter] OK  [Esc] Back", COLOR_TEXT);
     }
 
-    // Use the actual badge labels, alongside the equivalent keyboard controls.
+    // Match the physical left/back, middle/select, right/forward arrangement.
     int button_footer = UI_Y + UI_HEIGHT + 4;
     draw_rect(framebuffer, width, UI_X, button_footer, UI_WIDTH, LINE_HEIGHT, COLOR_BG);
     draw_string(framebuffer, width, content_x, button_footer,
-        "Up/Down: choose  A/Enter: OK  B/Esc: back", COLOR_TEXT);
+#ifdef BOARD_TUFTY
+        "Up/Down: move  A: back  B/C: select", COLOR_TEXT);
+#else
+        "Up/Down: choose  Enter: OK  Esc: back", COLOR_TEXT);
+#endif
     
     ui_dirty = false;
     ui_rendered = true;

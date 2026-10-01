@@ -33,7 +33,8 @@ The badge does not expose a USB configuration drive. Follow the
 installation. Replacing the data image replaces saved programs too. Firmware-only
 updates preserve an existing volume and its Wi-Fi file.
 
-After connecting, HOME opens the menu, C enables browser control, and HOME
+After connecting, HOME opens the menu. Choose Web control with up/down, press
+B or C to enable it, and HOME
 returns to the Apple. Web control remains an explicit per-session choice.
 
 ## File format

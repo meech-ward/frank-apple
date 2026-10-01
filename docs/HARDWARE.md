@@ -24,11 +24,12 @@ The Tufty variant uses its built-in parallel ST7789 screen, 8 MiB PSRAM, and
 volume. There is no SD-card slot. Board pin definitions live in
 `boards/pimoroni_tufty2350.h` and `src/board_config.h`.
 
-HOME opens/closes the [button launcher](BUTTON-LAUNCHER.md); up/down select,
-A confirms, and B goes back. Saved programs browses Applesoft files on the
-DOS 3.3 disk in drive 1; Choose a disk opens the disk menu. On the HOME screen,
-C toggles browser control. Outside the menu, the buttons provide arrows,
-Return, Escape, and Space. The badge has no built-in speaker.
+HOME opens/closes the [button launcher](BUTTON-LAUNCHER.md); up/down move,
+A goes back, and B or C confirms. Saved programs browses Applesoft files on the
+DOS 3.3 disk in drive 1; Choose a disk opens the disk menu. Select Web control
+on the HOME screen with B or C to toggle browser control. Outside the menu,
+A sends Escape, B Return, C Right, and up/down send their arrows.
+The badge has no built-in speaker.
 
 ## USB role and recovery
 
