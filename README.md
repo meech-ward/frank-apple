@@ -12,6 +12,8 @@ It is an independent downstream, not an official FRANK release.
 ## What this fork adds
 
 - Tufty parallel LCD, PSRAM, flash-backed disk storage, buttons and activity LEDs.
+- A [button launcher](docs/BUTTON-LAUNCHER.md) to browse saved Applesoft programs,
+  load/run them without a keyboard, stop BASIC, and select disks.
 - Pico 2 W SPI LCD and SD-card support for the wiring described below.
 - Browser disk uploads and library, multi-disk Boot/Insert controls, blank data
   disks, and BASIC source-file import. Bring your own applications.

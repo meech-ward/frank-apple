@@ -28,6 +28,8 @@ jobs:
           python3 tools/check-clean-package.py
           python3 tools/check-board-memory.py
           python3 tools/check-tufty-power.py
+          python3 tools/check-dos-catalog.py
+          python3 tools/check-launcher.py
 
   firmware:
     runs-on: ubuntu-24.04

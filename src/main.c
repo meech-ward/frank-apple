@@ -453,8 +453,8 @@ static void process_serial_keyboard(void) {
 
 #ifdef BOARD_TUFTY
 // Tufty 2350 badge: power latch, case LEDs, and the six buttons. HOME opens and
-// closes the disk menu (same as F11 / console Ctrl-]); while the menu is open
-// UP/DOWN move, A is Enter, B is Esc, C toggles Read-only (space). With the
+// closes the launcher (same as F11 / console Ctrl-]); while the menu is open
+// UP/DOWN move, A is Enter, B is Esc, C is the screen's Space shortcut. With the
 // menu closed the same buttons type into the Apple: up/down arrows, Return,
 // Esc, space, so a game or a prompt can be driven with no keyboard attached.
 enum { TB_HOME, TB_UP, TB_DOWN, TB_A, TB_B, TB_C, TB_COUNT };

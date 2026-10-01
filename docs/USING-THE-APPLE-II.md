@@ -10,14 +10,17 @@ For guided lessons and a virtual keyboard, enable the local browser Field Guide.
 Choose **Start my first session** for one action at a time, then try creating a
 game or exploring classic applications. Supply the [required disks](DISKS.md)
 for the application journeys.
-On the first HOME disk-menu screen, C toggles Web control and shows its local WiFi address.
+On the HOME launcher screen, C toggles Web control and shows its local WiFi address.
 Open that address on your computer or phone, then press HOME to return to the Apple.
-The web server is off after every reset. USB console debugging stays available.
+The web server is off after every reset. USB console debugging is available in
+the console build; the keyboard build uses that USB port to host a keyboard.
 
 The badge boots DOS automatically from the last disk mounted in drive 1. Its buttons work
-without a keyboard: HOME opens or closes the disk menu, UP/DOWN move through it, A selects,
-B goes back, and C toggles Read-only on the action screen. Outside the menu, those buttons
-send up/down, Return, Escape, and Space to the Apple II.
+without a keyboard: HOME opens or closes the launcher, UP/DOWN move through it,
+A selects and B goes back. Saved programs lists Applesoft programs on the DOS 3.3
+disk in drive 1; Choose a disk opens the disk menu. C toggles Read-only on the
+disk action screen. Outside the menu, those buttons send up/down, Return, Escape,
+and Space to the Apple II. See the [button launcher](BUTTON-LAUNCHER.md).
 
 The case LEDs show drive activity. After SAVE, wait for the `]` prompt and for the drive
 indicator to turn off before resetting or powering down. A save may take several seconds;

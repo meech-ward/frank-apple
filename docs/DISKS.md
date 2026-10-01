@@ -87,6 +87,10 @@ and `CATALOG`, first boot a DOS disk you supply. A writable DOS 3.3 image named
 `Workshop.dsk` matches the guide's programming lessons. Save STAR TRADER and the
 other provided listings onto it before lessons that load those filenames.
 
+Once saved, use **HOME → Saved programs** to load or run an Applesoft program
+from the drive-1 DOS 3.3 disk with the badge's buttons. See the
+[button launcher](BUTTON-LAUNCHER.md) for controls and supported files.
+
 A newly installed device can run ROM BASIC without DOS. Application disks and
 DOS are optional imports, not dependencies hidden inside the clean installer.
 The inherited Apple ROM arrays remain in firmware under their existing provenance;

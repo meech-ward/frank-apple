@@ -21,6 +21,9 @@ struct mii_t;
 // UI state
 typedef enum {
     DISK_UI_HIDDEN,
+    DISK_UI_HOME,           // Resume, saved programs, run/stop, disks
+    DISK_UI_PROGRAMS,       // Applesoft programs in drive 1's DOS 3.3 catalog
+    DISK_UI_PROGRAM_ACTION,// Run or load the selected saved program
     DISK_UI_SELECT_DRIVE,   // Selecting which drive (1 or 2)
     DISK_UI_SELECT_FILE,    // Selecting disk image file
     DISK_UI_SELECT_ACTION,  // Selecting action: Boot, Insert, or Cancel

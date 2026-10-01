@@ -243,6 +243,7 @@ endif()
 
 # Apple IIe Emulator sources
 add_executable(${BUILD_NAME}
+    src/dos_catalog.c
     src/main.c
     src/input_controls.c
     src/mii_65c02.c

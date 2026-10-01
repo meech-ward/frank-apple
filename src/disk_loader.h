@@ -11,6 +11,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "dos_catalog.h"
 
 // Maximum filename length
 #define MAX_FILENAME_LEN 64
@@ -110,6 +111,10 @@ int disk_mount_to_emulator(int drive, struct mii_t *mii, int slot, int preserve_
 // Autoboot: remember the disk in drive 1 (index 0) and mount it again at power-up.
 void disk_autoboot_save(int drive);
 int disk_autoboot_mount(struct mii_t *mii, int slot);
+
+// Read current drive 1's Applesoft catalog without moving the head or flushing.
+// Call on core 0 while the emulator is paused in the menu.
+int disk_saved_programs(struct mii_t *mii, dos_program_t *programs, size_t capacity);
 
 // Eject a disk from the emulator
 // drive: 0 or 1 (Drive 1 or Drive 2)

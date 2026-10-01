@@ -92,3 +92,21 @@ It does not validate whether an application will boot or emulate IIgs hardware.
 Uploads use a temporary file and are listed only after validation and close;
 existing originals and saved working copies are not overwritten. Sudden power
 loss can still damage a FAT filesystem. Keep backups before hardware testing.
+# Button launcher update — 2026-10-01
+
+The button-launcher update passes all four firmware builds (Tufty/Pico,
+keyboard/console), the active-driver license checks, 13 Python host checks,
+and the browser Field Guide checks. The new catalog and menu checks run with
+ASan/UBSan. A private, previously saved System Master BDSK was also read
+successfully: 14 Applesoft programs, including user-created files. This exercised
+real unaligned writes in addition to synthetic rotated/corrupt tracks.
+
+Production-renderer screen images were inspected for the HOME menu, program
+list, Run/Load actions, unavailable BASIC prompt and unreadable catalog.
+The menu harness checks unchanged Apple RAM after closing, blocked commands
+after snapshot failures, Back/wrap navigation, stop, web toggle and disk access.
+
+**Physical validation of this new launcher is pending.** No badge was attached
+in bootloader mode while the update was prepared. The September 26 physical
+keyboard and power tests below describe that earlier build, not a new physical
+test of this firmware. See [button controls and limits](BUTTON-LAUNCHER.md).

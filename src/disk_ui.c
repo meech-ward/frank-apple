@@ -17,6 +17,7 @@
 #include "mii_sw.h"
 #include "mii_bank.h"
 #include "debug_log.h"
+#include "typing.h"
 #if NETCARD_WEB_CONTROL
 #include "web_control.h"
 #endif
@@ -40,6 +41,17 @@ static volatile int selected_action = 0;     // 0=Boot, 1=Insert, 2=Cancel
 static volatile int scroll_offset = 0;       // For scrolling long lists
 static volatile bool ui_dirty = false;       // True when UI needs redraw
 static volatile bool ui_rendered = false;    // True when UI has been rendered at least once
+static int home_item, program_item, program_scroll, program_action;
+static int program_count;
+static dos_program_t programs[DOS_PROGRAM_MAX];
+static bool basic_ready;
+static const char *home_message;
+static const char *home_items[] = {
+    "Resume Apple II", "Saved programs", "Run program in memory",
+    "Stop program (Ctrl-C)", "Choose a disk"
+};
+#define HOME_ITEMS 5
+#define PROGRAM_VISIBLE 12
 
 // With double-buffering, the render target alternates each frame.
 static uint8_t *g_last_framebuffer = NULL;
@@ -313,6 +325,9 @@ extern char selected_dir[128];
 void disk_ui_show(void) {
     mutex_enter_blocking(&video_mutex);
     if (ui_state == DISK_UI_HIDDEN) {
+        // Capture before the menu borrows Apple RAM for its disk-image list.
+        basic_ready = remote_control_basic_prompt();
+        home_message = NULL;
         FRANK_LED_PUT(true);
         FRESULT fr = f_open(&fp, "/tmp/apple.snap", FA_CREATE_ALWAYS | FA_WRITE);
         UINT wb = 0;
@@ -339,7 +354,8 @@ void disk_ui_show(void) {
         printf("Found %d disk images\n", count);
         FRANK_LED_PUT(false);
 
-        ui_state = DISK_UI_SELECT_DRIVE;
+        ui_state = DISK_UI_HOME;
+        home_item = 0;
         selected_drive = 0;
         ui_dirty = true;
         ui_rendered = false;
@@ -416,7 +432,31 @@ size_t disk_ui_describe(char *out, size_t cap) {
         if (written > 0) used += (size_t)written < cap - used ? (size_t)written : cap - used - 1; \
     } \
 } while (0)
-    if (ui_state == DISK_UI_SELECT_DRIVE) {
+    if (ui_state == DISK_UI_HOME) {
+        MENU_TEXT("APPLE II\n\n");
+        for (int i = 0; i < HOME_ITEMS; ++i)
+            MENU_TEXT("%c %s\n", i == home_item ? '>' : ' ', home_items[i]);
+        MENU_TEXT("\n%s\n", home_message ? home_message : "Saved programs: DOS 3.3 / drive 1");
+        MENU_TEXT("UP/DOWN: choose  A/RETURN: select\nB/ESC: resume  HOME: resume\n");
+#if NETCARD_WEB_CONTROL
+        char address[48]; web_control_address(address, sizeof(address));
+        MENU_TEXT("\nC/SPACE: Web control %s\n%s\n", web_control_enabled() ? "ON" : "OFF", address);
+#endif
+    } else if (ui_state == DISK_UI_PROGRAMS) {
+        MENU_TEXT("SAVED PROGRAMS - DRIVE 1\n%.39s\n\n", g_loaded_disks[0].filename);
+        if (program_count < 0) MENU_TEXT("Use a DOS 3.3 disk in drive 1.\nThis catalog could not be read.\n");
+        else if (!program_count) MENU_TEXT("No Applesoft programs on this disk.\nCreate one in BASIC: SAVE MY PROGRAM\n");
+        for (int i = program_scroll; i < program_count && i < program_scroll + PROGRAM_VISIBLE; ++i)
+            MENU_TEXT("%c %s\n", i == program_item ? '>' : ' ', programs[i].name);
+        MENU_TEXT("\nA/RETURN: options  B/ESC: back\nC/SPACE: refresh  UP/DOWN: choose\n");
+    } else if (ui_state == DISK_UI_PROGRAM_ACTION) {
+        MENU_TEXT("SAVED PROGRAM\n%s\n\n", programs[program_item].name);
+        MENU_TEXT("Replaces the program in memory.\nSave your current work first.\n\n");
+        if (!basic_ready) MENU_TEXT("Return to the empty ] BASIC prompt\nbefore loading a saved program.\n\n");
+        const char *actions[] = {"Run program", "Load without running", "Back"};
+        for (int i = 0; i < 3; ++i) MENU_TEXT("%c %s\n", i == program_action ? '>' : ' ', actions[i]);
+        MENU_TEXT("\nA/RETURN: select  B/ESC: back\n");
+    } else if (ui_state == DISK_UI_SELECT_DRIVE) {
         MENU_TEXT("CHOOSE A DISK DRIVE\n\n");
         for (int i = 0; i < 2; ++i)
             MENU_TEXT("%c DRIVE %d\n  %.36s\n\n", i == selected_drive ? '>' : ' ', i + 1,
@@ -608,10 +648,84 @@ static bool disk_ui_select_loaded_file(int drive)
     return false; // файл не найден
 }
 
+static void refresh_programs(void) {
+    program_count = disk_saved_programs(g_mii, programs, DOS_PROGRAM_MAX);
+    program_item = program_scroll = 0;
+    ui_state = DISK_UI_PROGRAMS;
+    ui_dirty = true;
+}
+
+static void launch_command(const char *command) {
+    disk_ui_hide();
+    if (disk_ui_is_visible()) return; // snapshot restore must succeed first
+    clear_held_key();
+    if (!typing_try_literal((const uint8_t *)command, strlen(command))) {
+        disk_ui_show();
+        home_message = "Typing busy. Resume and try again.";
+    }
+}
+
+static bool handle_launcher_key(uint8_t key) {
+    int direction = key == 0x0b || key == 0x08 ? -1 :
+                    key == 0x0a || key == 0x15 ? 1 : 0;
+    ui_dirty = true;
+    if (ui_state == DISK_UI_HOME) {
+        if (direction) { home_item = (home_item + direction + HOME_ITEMS) % HOME_ITEMS; home_message = NULL; }
+        if (key == 0x1b) disk_ui_hide();
+#if NETCARD_WEB_CONTROL
+        if (key == ' ') web_control_toggle();
+#endif
+        if (key == '\r') {
+            switch (home_item) {
+                case 0: disk_ui_hide(); break;
+                case 1: refresh_programs(); break;
+                case 2:
+                    if (basic_ready) launch_command("RUN\r");
+                    else home_message = "Run needs an empty ] BASIC prompt.";
+                    break;
+                case 3:
+                    disk_ui_hide();
+                    if (!disk_ui_is_visible()) { clear_held_key(); remote_control_key(3); }
+                    break;
+                case 4: ui_state = DISK_UI_SELECT_DRIVE; break;
+            }
+        }
+        // Keep the existing keyboard shortcuts to each disk drive.
+        if (key == '1' || key == '2') {
+            ui_state = DISK_UI_SELECT_DRIVE;
+            return disk_ui_handle_key(key);
+        }
+    } else if (ui_state == DISK_UI_PROGRAMS) {
+        if (key == 0x1b) ui_state = DISK_UI_HOME;
+        if (key == ' ') refresh_programs();
+        if (direction && program_count > 0) {
+            program_item = (program_item + direction + program_count) % program_count;
+            if (program_item < program_scroll) program_scroll = program_item;
+            if (program_item >= program_scroll + PROGRAM_VISIBLE)
+                program_scroll = program_item - PROGRAM_VISIBLE + 1;
+        }
+        if (key == '\r' && program_count > 0) {
+            program_action = basic_ready ? 0 : 2;
+            ui_state = DISK_UI_PROGRAM_ACTION;
+        }
+    } else {
+        if (direction) program_action = (program_action + direction + 3) % 3;
+        if (key == 0x1b || (key == '\r' && program_action == 2)) ui_state = DISK_UI_PROGRAMS;
+        else if (key == '\r' && basic_ready) {
+            char command[64];
+            if (dos_program_command(command, sizeof(command), programs[program_item].name,
+                                    program_action == 0)) launch_command(command);
+        }
+    }
+    return true;
+}
+
 bool disk_ui_handle_key(uint8_t key) {
     if (ui_state == DISK_UI_HIDDEN || ui_state == DISK_UI_LOADING) {
         return false;
     }
+    if (ui_state == DISK_UI_HOME || ui_state == DISK_UI_PROGRAMS ||
+        ui_state == DISK_UI_PROGRAM_ACTION) return handle_launcher_key(key);
     
     MII_DEBUG_PRINTF("Disk UI key: 0x%02X in state %d\n", key, ui_state);
     
@@ -625,6 +739,9 @@ bool disk_ui_handle_key(uint8_t key) {
                 ui_dirty = true;
             } else if (ui_state == DISK_UI_SELECT_ACTION) {
                 ui_state = DISK_UI_SELECT_FILE;
+                ui_dirty = true;
+            } else if (ui_state == DISK_UI_SELECT_DRIVE) {
+                ui_state = DISK_UI_HOME;
                 ui_dirty = true;
             } else {
                 disk_ui_hide();
@@ -943,7 +1060,63 @@ void disk_ui_render(uint8_t *framebuffer, int width, int height) {
     // Draw border
     draw_border(framebuffer, width, UI_X, UI_Y, UI_WIDTH, UI_HEIGHT);
     
-    if (state == DISK_UI_LOADING) {
+    if (state == DISK_UI_HOME) {
+        draw_header(framebuffer, width, UI_X, UI_Y, UI_WIDTH, " Apple II ");
+        int y = content_y + 4;
+        for (int i = 0; i < HOME_ITEMS; ++i, y += 16)
+            draw_menu_item(framebuffer, width, content_x, y, content_width,
+                           home_items[i], max_chars, home_item == i);
+        y += 6;
+        draw_string_truncated(framebuffer, width, content_x, y,
+            home_message ? home_message : "Saved programs: DOS 3.3 / drive 1", max_chars, COLOR_TEXT);
+#if NETCARD_WEB_CONTROL
+        y += 24;
+        draw_string(framebuffer, width, content_x, y,
+            web_control_enabled() ? "C / Space: Web control ON" : "C / Space: Web control OFF", COLOR_TEXT);
+        char address[48]; web_control_address(address, sizeof(address));
+        draw_string_truncated(framebuffer, width, content_x, y + 14, address, max_chars, COLOR_TEXT);
+#endif
+        draw_string(framebuffer, width, content_x, UI_Y + UI_HEIGHT - 16,
+            "HOME / B / Esc: resume Apple II", COLOR_TEXT);
+    } else if (state == DISK_UI_PROGRAMS) {
+        draw_header(framebuffer, width, UI_X, UI_Y, UI_WIDTH, " Saved programs - Drive 1 ");
+        int y = content_y;
+        draw_string_truncated(framebuffer, width, content_x, y,
+            g_loaded_disks[0].loaded ? g_loaded_disks[0].filename : "No disk in drive 1", max_chars, COLOR_TEXT);
+        y += 20;
+        if (program_count < 0) {
+            draw_string(framebuffer, width, content_x, y, "Use a DOS 3.3 disk in drive 1.", COLOR_TEXT);
+            draw_string(framebuffer, width, content_x, y+14, "This catalog could not be read.", COLOR_TEXT);
+            draw_string(framebuffer, width, content_x, y+40, "B: back, then Choose a disk.", COLOR_TEXT);
+        } else if (!program_count) {
+            draw_string(framebuffer, width, content_x, y, "No Applesoft programs on this disk.", COLOR_TEXT);
+            draw_string(framebuffer, width, content_x, y+24, "Create one in BASIC, then:", COLOR_TEXT);
+            draw_string(framebuffer, width, content_x, y+38, "SAVE MY PROGRAM", COLOR_TEXT);
+        } else {
+            for (int i = program_scroll; i < program_count && i < program_scroll + PROGRAM_VISIBLE; ++i, y += LINE_HEIGHT)
+                draw_menu_item(framebuffer, width, content_x, y, content_width-8,
+                    programs[i].name, max_chars-2, program_item == i);
+            if (program_count > PROGRAM_VISIBLE)
+                draw_scrollbar(framebuffer, width, UI_X+UI_WIDTH-UI_PADDING-4,
+                    content_y+20, PROGRAM_VISIBLE*LINE_HEIGHT, program_count, PROGRAM_VISIBLE, program_scroll);
+        }
+        draw_string(framebuffer, width, content_x, UI_Y+UI_HEIGHT-16,
+            "C / Space: refresh saved programs", COLOR_TEXT);
+    } else if (state == DISK_UI_PROGRAM_ACTION) {
+        draw_header(framebuffer, width, UI_X, UI_Y, UI_WIDTH, " Saved program ");
+        int y = content_y + 4;
+        draw_string(framebuffer, width, content_x, y, programs[program_item].name, COLOR_TEXT);
+        draw_string(framebuffer, width, content_x, y+22, "Replaces the program in memory.", COLOR_TEXT);
+        draw_string(framebuffer, width, content_x, y+36, "Save your current work first.", COLOR_TEXT);
+        if (!basic_ready) {
+            draw_string(framebuffer, width, content_x, y+60, "Return to the empty ] BASIC prompt", COLOR_TEXT);
+            draw_string(framebuffer, width, content_x, y+74, "before loading a saved program.", COLOR_TEXT);
+        }
+        const char *actions[] = {"Run program", "Load without running", "Back"};
+        for (int i = 0; i < 3; ++i)
+            draw_menu_item(framebuffer, width, content_x, y+102+i*16, content_width,
+                actions[i], max_chars, program_action == i);
+    } else if (state == DISK_UI_LOADING) {
         // Loading screen
         draw_header(framebuffer, width, UI_X, UI_Y, UI_WIDTH, " Loading... ");
         
@@ -1104,6 +1277,12 @@ void disk_ui_render(uint8_t *framebuffer, int width, int height) {
         draw_rect(framebuffer, width, UI_X, footer_y, UI_WIDTH, LINE_HEIGHT, COLOR_BG);
         draw_string(framebuffer, width, content_x, footer_y, "[Up/Dn] Select  [Enter] OK  [Esc] Back", COLOR_TEXT);
     }
+
+    // Use the actual badge labels, alongside the equivalent keyboard controls.
+    int button_footer = UI_Y + UI_HEIGHT + 4;
+    draw_rect(framebuffer, width, UI_X, button_footer, UI_WIDTH, LINE_HEIGHT, COLOR_BG);
+    draw_string(framebuffer, width, content_x, button_footer,
+        "Up/Down: choose  A/Enter: OK  B/Esc: back", COLOR_TEXT);
     
     ui_dirty = false;
     ui_rendered = true;

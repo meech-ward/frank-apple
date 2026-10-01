@@ -1144,6 +1144,63 @@ int disk_mount_to_emulator(int drive, mii_t *mii, int slot, int preserve_state, 
 
 extern int g_disk2_slot; // slot for Disk II
 
+static bool disk_catalog_sector(void *context, uint8_t track, uint8_t sector,
+                                uint8_t out[256]) {
+    mii_floppy_t *floppies[2] = {NULL, NULL};
+    if (track >= BDSK_TRACKS ||
+        mii_slot_command(context, g_disk2_slot, MII_SLOT_D2_GET_FLOPPY, floppies) < 0 ||
+        !floppies[0]) return false;
+    mii_floppy_t *floppy = floppies[0];
+    // Most recent SAVE may still be in the live track, ahead of its .bdsk copy.
+    // Read it directly; never disturb head position, dirty flags or disk timers.
+    if (floppy->qtrack < sizeof(floppy->track_id) &&
+        floppy->track_id[floppy->qtrack] == track)
+        return dos_catalog_sector(floppy->curr_track_data,
+            floppy->tracks[track].bit_count, track, sector, out);
+
+    uint32_t offset = sizeof(bdsk_header_t) + track * (4 + BDSK_TRACK_DATA_SIZE);
+#if PICO_RP2350 && PSRAM_MAX_FREQ_MHZ
+    uint32_t count;
+    memcpy(&count, drive0_cache + offset, sizeof(count));
+    return dos_catalog_sector(drive0_cache + offset + 4, count, track, sector, out);
+#else
+    uint8_t *buffer = malloc(4 + BDSK_TRACK_DATA_SIZE);
+    if (!buffer) return false;
+    bool ok = false;
+    FIL *source;
+#if PICO_RP2350
+    source = s_bdsk_fp0_open ? &s_bdsk_fp0 : NULL;
+#else
+    FIL local;
+    char filename[272];
+    source = NULL;
+    if (disk_image_path(filename, sizeof(filename), g_dd_files[0].pathname, true) &&
+        f_open(&local, filename, FA_READ) == FR_OK) source = &local;
+#endif
+    if (source) {
+        FSIZE_t previous = f_tell(source);
+        UINT read = 0;
+        if (f_lseek(source, offset) == FR_OK &&
+            f_read(source, buffer, 4 + BDSK_TRACK_DATA_SIZE, &read) == FR_OK &&
+            read == 4 + BDSK_TRACK_DATA_SIZE) {
+            uint32_t count; memcpy(&count, buffer, sizeof(count));
+            ok = dos_catalog_sector(buffer + 4, count, track, sector, out);
+        }
+        if (f_lseek(source, previous) != FR_OK) ok = false;
+#if !PICO_RP2350
+        if (f_close(source) != FR_OK) ok = false;
+#endif
+    }
+    free(buffer);
+    return ok;
+#endif
+}
+
+int disk_saved_programs(mii_t *mii, dos_program_t *programs, size_t capacity) {
+    if (!mii || !sd_mounted || !g_loaded_disks[0].loaded) return -1;
+    return dos_catalog_scan(disk_catalog_sector, mii, programs, capacity);
+}
+
 int disk_reload_track(uint8_t drive, uint8_t track_id, mii_t* mii) {
     if (drive > 1 || track_id >= BDSK_TRACKS) return -1;
     loaded_disk_t *disk = &g_loaded_disks[drive];
