@@ -33,11 +33,11 @@ uses a separate directory so differently configured objects cannot be mixed:
 | Tufty 2350 | `build-public-tufty/` | `build-public-tufty-kbd/` |
 
 Each directory contains `.elf`, `.bin`, and `.uf2` files. Use only the firmware
-for your exact hardware. Both USB variants include the browser guide and HTTP
+for your exact hardware. Both USB variants include SSH, hotspot mode, the browser guide and HTTP
 client. The console variant exposes USB serial; the keyboard variant uses the
 native port as a host. SWD remains available in either mode.
 
-The helper selects 252 MHz, PWM audio, TLS verification, and local web control;
+The helper selects 252 MHz, PWM audio, TLS verification, SSH, and local web control;
 PS/2 is disabled. Tufty uses the 84 MHz PSRAM setting; Pico uses no PSRAM. The
 CMake options remain available for custom builds. Network credentials are read
 at startup from `/wifi.ini`; no secrets file is imported at compile time.
@@ -52,6 +52,13 @@ Requires a C compiler with AddressSanitizer/UBSan and Node.js (20 or newer).
 python3 tools/check-net-http.py
 python3 tools/check-netcard.py
 python3 tools/check-wifi-config.py
+python3 tools/check-wifi-dhcp.py
+python3 tools/check-wifi-access-point.py
+python3 tools/check-configure-wifi.py
+python3 tools/check-ssh-terminal.py
+python3 tools/check-ssh-control.py
+python3 tools/check-ssh-identity.py
+python3 tests/test_ssh_transport.py --sdk "$PICO_SDK_PATH"
 python3 tools/check-video-mixed.py
 python3 tools/check-cpu-bus.py
 node tools/check-guide.mjs
@@ -66,6 +73,15 @@ The USB check uses HID definitions from `PICO_SDK_PATH`'s TinyUSB checkout;
 it compiles the actual report callbacks and Apple input adapter on the host.
 Memory tests cover timing and chip-capacity parsing; they cannot exercise a
 physical memory chip. See [EXTERNAL_MEMORY.md](EXTERNAL_MEMORY.md).
+
+The SSH interoperability check also needs Clang/Clang++ and an OpenSSH client.
+It compiles the firmware's SSH engine with the SDK's mbedTLS sources, runs
+malformed-packet and state tests under sanitizers, and connects to a localhost
+test server using ordinary `ssh`. It also exercises the raw TCP adapter with the
+SDK's real lwIP packet-buffer implementation. Test-only credentials never enter firmware.
+`NETCARD_SSH=OFF` removes the SSH transport for custom builds. Supported SSH
+builds reserve 12 KiB of core-0 stack in main SRAM; core 1 retains its 2 KiB video
+stack in scratch X. The linker excludes the core-0 stack from the heap.
 
 Optional live checks:
 

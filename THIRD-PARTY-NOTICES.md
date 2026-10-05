@@ -28,6 +28,15 @@ separately. This repository must not be treated as uniformly MIT-licensed.
   [source and changes](drivers/vendor/pico_psram/README.md) and the
   [BSD-3-Clause notice](licenses/RaspberryPi-PSRAM-BSD.txt).
 - **FatFs**, ChaN: notices and BSD-style terms are embedded in the FatFs sources.
+- **staticnet SSH cryptography and transport design**, Andrew D. Zonenberg and
+  contributors: a pinned, adapted BSD-3-Clause subset supplies the SSH key
+  exchange and cryptography abstraction. See [source and local changes](third_party/ssh/README.md)
+  and the retained [BSD notice](licenses/staticnet-BSD-3-Clause.txt).
+  Its reduced TweetNaCl and libb64 components retain their public-domain terms.
+  The firmware does not use wolfSSH, pico-sshd, or their GPL implementations.
+- **Mbed TLS**, Arm and contributors: the Pico SDK's implementation supplies
+  HTTPS and SSH AES-GCM/SHA-256 under its Apache-2.0 option. The complete
+  [upstream dual-license text](licenses/MbedTLS-LICENSE.txt) is included.
 - **SD driver**, Elehobica and Raspberry Pi contributors:
   [driver license](drivers/sdcard/LICENSE) and file-level BSD notices.
 - **Pico SDK / pico-extras**, Raspberry Pi: upstream links and file-level licenses

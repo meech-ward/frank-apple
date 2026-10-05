@@ -5,7 +5,8 @@ build/
 release/
 
 # Third party dependencies
-third_party/
+third_party/*
+!third_party/ssh/
 
 # IDE
 .vscode/
@@ -19,6 +20,8 @@ bin/
 build-*/
 generated/
 wifi.ini
+ssh.key
+ssh-key.tmp
 
 # Local settings and data (publish wifi.example.ini only)
 secrets.cmake

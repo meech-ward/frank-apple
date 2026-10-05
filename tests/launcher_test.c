@@ -15,7 +15,7 @@ char selected_dir[128]="/apple";
 disk_entry_t *g_disk_list=(disk_entry_t *)vram;
 int g_disk_count;
 loaded_disk_t g_loaded_disks[2];
-static bool ready=true,fail_save,fail_restore,web;
+static bool ready=true,fail_save,fail_restore,web,ssh;
 static int catalog_count=15,stopped,scan_calls,mounted;
 static bool mounted_read_only;
 static int mounted_preserve;
@@ -42,6 +42,9 @@ void clear_held_key(void) {}
 void web_control_toggle(void) { web=!web; }
 bool web_control_enabled(void) { return web; }
 void web_control_address(char *out,size_t n) { snprintf(out,n,"http://10.0.0.41"); }
+void ssh_control_toggle(void) { ssh=!ssh; }
+const char *ssh_control_label(void) { return ssh?"SSH: ON":"SSH: OFF"; }
+void ssh_control_address(char *out,size_t n) { snprintf(out,n,"ssh apple@192.168.4.1"); }
 void mii_reset(mii_t *m,bool cold) { (void)m;(void)cold; }
 void mii_bank_poke(mii_bank_t *b,unsigned a,uint8_t d) { (void)b;(void)a;(void)d; }
 void mii_mem_access(mii_t *m,unsigned a,uint8_t *d,bool w,bool s) { (void)m;(void)a;(void)d;(void)w;(void)s; }
@@ -107,7 +110,7 @@ int main(int argc,char **argv) {
     ready=true;open_home();key(0x0a);key(0x0a);key('\r');assert(!strcmp(typed,"RUN\r"));
     catalog_count=0;open_home();programs_menu();expect("No Applesoft programs");key('\r');assert(!typed[0]);
     catalog_count=-1;key(' ');expect("could not be read");render_file(images,"no-dos");
-    key(0x1b);key(0x0b);key(0x0b);key(0x0b);key('\r');expect("CHOOSE A DISK DRIVE");
+    key(0x1b);key(0x0a);key(0x0a);key(0x0a);key('\r');expect("CHOOSE A DISK DRIVE");
     key(0x1b);expect("APPLE II");key('2');expect("CHOOSE A DISK FOR DRIVE 2");
     key(0x1b);key(0x1b);key(0x1b);assert(!disk_ui_is_visible());
     fail_save=true;memset(vram,0x6d,sizeof(vram));int scans=scan_calls;
@@ -119,7 +122,12 @@ int main(int argc,char **argv) {
     // Exercise the same physical-button mapping called by main.c. C must
     // select, never toggle web/read-only or refresh instead of opening a file.
     web=false;open_home();button(TB_C);assert(!disk_ui_is_visible()&&!web);
-    open_home();button(TB_UP);expect("> Web control: OFF");
+    open_home();button(TB_UP);
+#if NETCARD_SSH
+    expect("> SSH: OFF");button(TB_B);expect("> SSH: ON");assert(ssh);
+    button(TB_C);assert(!ssh);expect("ssh apple@192.168.4.1");button(TB_UP);
+#endif
+    expect("> Web control: OFF");
     button(TB_B);expect("> Web control: ON");assert(web);
     button(TB_C);assert(!web);button(TB_A);assert(!disk_ui_is_visible());
     open_home();button(TB_DOWN);button(TB_B);expect("SAVED PROGRAMS");
@@ -128,7 +136,11 @@ int main(int argc,char **argv) {
     open_home();button(TB_DOWN);button(TB_C);button(TB_B);button(TB_DOWN);button(TB_B);
     assert(!strcmp(typed,"LOAD DEMO 01,S6,D1\r"));
 
-    open_home();button(TB_UP);button(TB_UP);button(TB_B);expect("CHOOSE A DISK DRIVE");
+    open_home();button(TB_UP);button(TB_UP);
+#if NETCARD_SSH
+    button(TB_UP);
+#endif
+    button(TB_B);expect("CHOOSE A DISK DRIVE");
     render_file(images,"drives");
     button(TB_DOWN);button(TB_B);expect("CHOOSE A DISK FOR DRIVE 2");
     button(TB_DOWN);button(TB_C);expect("DISK ACTION");

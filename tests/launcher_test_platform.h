@@ -6,6 +6,9 @@
 #define RAM_PAGES_PER_POOL 16
 #define RAM_PAGE_SIZE 4096
 #define NETCARD_WEB_CONTROL 1
+#ifndef NETCARD_SSH
+#define NETCARD_SSH 1
+#endif
 #define BOARD_TUFTY 1
 #define __scratch_x()
 #define __dmb() ((void)0)

@@ -6,7 +6,7 @@
 #define MEM_ALIGNMENT               4
 #define MEM_SIZE                    4000
 #define MEMP_NUM_TCP_SEG            32
-#if NETCARD_WEB_CONTROL
+#if NETCARD_WEB_CONTROL || NETCARD_SSH
 /* The web controller, outbound GET and Realtime share this TCP packet heap.
  * The original 4 KB can be exhausted by one screen response while a TLS
  * handshake is trying to send, leaving connections stalled under polling. */

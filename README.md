@@ -19,7 +19,10 @@ It is an independent downstream, not an official FRANK release.
   disks, and BASIC source-file import. Bring your own applications.
 - Local browser typing, a 40/80-column text view, guided Apple II lessons,
   and editable BASIC programs. No account or cloud service required.
-- Optional Wi-Fi configured with a separate `wifi.ini` file.
+- [SSH keyboard and text mirror](docs/SSH.md), using your computer's normal
+  `ssh` client. One shared Apple II session with password login.
+- Optional Wi-Fi configured with a separate `wifi.ini` file: join an existing
+  network or create a portable hotspot. No firmware rebuild for settings.
 - HTTP/HTTPS GET, POST, PUT, PATCH and DELETE from BASIC, with explicit headers
   and small request bodies. No built-in Supabase project or remote cloud keyboard.
 - Storage, keyboard startup, display and emulation fixes, plus host-side tests.
@@ -32,7 +35,7 @@ It is an independent downstream, not an official FRANK release.
 2. [Build the firmware](docs/BUILDING.md) and [install it](docs/INSTALL.md).
 3. Optionally copy [wifi.example.ini](wifi.example.ini) as `wifi.ini` and follow
    [Wi-Fi setup](docs/WIFI-SETUP.md).
-4. Open the local Field Guide, or connect a USB keyboard. Try the
+4. [Connect with SSH](docs/SSH.md), open the local Field Guide, or connect a USB keyboard. Try the
    [BASIC examples](basic/) and [HTTP examples](docs/HTTP-GET.md).
 
 The repository contains source, documentation and our BASIC examples. Classic
@@ -47,16 +50,17 @@ The supported Pico/Tufty builds now exclude the identified GPL input/memory
 drivers and retain Wi-Fi under the SDK's Raspberry-Pi-device license. Inherited
 Apple ROMs and the separately licensed SmartPort guest ROM remain as described
 in [distribution notes](docs/DISTRIBUTION.md). This driver update is not a blanket
-clearance of those embedded assets. No firmware binaries or application disks
-are released here.
+clearance of those embedded assets. Firmware-only updates are available in
+[Releases](https://github.com/meech-ward/frank-apple/releases); application disks
+and personal configuration are not included.
 
 ## Current validation
 
 The hardware ports, disk saves, browser guide and keyboard were exercised on
-both boards during development. The latest driver, disk-import, file-based Wi-Fi
-and expanded HTTP changes compile in all four board/USB combinations and pass
-host tests. **Those latest builds still need physical-device
-validation.** See [validation and limits](docs/VALIDATION.md).
+both boards during development. SSH has been tested against a real OpenSSH
+client on the host, with sanitizer tests for terminal input, protocol framing,
+flow control, authentication, and configuration. **SSH/hotspot operation on a
+physical badge still needs validation.** See [validation and limits](docs/VALIDATION.md).
 
 ## Upstream and licensing
 

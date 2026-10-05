@@ -3,7 +3,14 @@
 #include <stddef.h>
 
 #define WIFI_CONFIG_MAX 512
-typedef struct { char ssid[33]; char password[65]; } wifi_config;
+enum wifi_mode { WIFI_MODE_STATION, WIFI_MODE_HOTSPOT };
+typedef struct {
+    char ssid[33];
+    char password[65];
+    enum wifi_mode mode;
+    bool ssh_enabled;
+    char ssh_password[65];
+} wifi_config;
 enum wifi_config_status { WIFI_CONFIG_MISSING, WIFI_CONFIG_READY, WIFI_CONFIG_INVALID, WIFI_CONFIG_IO };
 
 /* Parse a bounded INI file; failure clears the entire result. No credentials

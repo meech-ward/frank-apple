@@ -230,7 +230,7 @@ SECTIONS
     } > RAM
     /* historically on GCC sbrk was growing past __HeapLimit to __StackLimit, however
        to be more compatible, we now set __HeapLimit explicitly to where the end of the heap is */
-    __HeapLimit = ORIGIN(RAM) + LENGTH(RAM);
+    __HeapLimit = __StackBottom;
 
     /* Start and end symbols must be word-aligned */
     .scratch_x : {
@@ -255,9 +255,9 @@ SECTIONS
      *
      * stack1 section may be empty/missing if platform_launch_core1 is not used */
 
-    /* by default we put core 0 stack at the end of scratch Y, so that if core 1
-     * stack is not used then all of SCRATCH_X is free.
-     */
+    /* SSH signing and HTTPS need more than a 4 KiB scratch bank. Reserve the
+     * core-0 stack at the top of main SRAM; core 1 keeps its video-only stack
+     * in scratch X. PICO_STACK_SIZE controls the actual reservation. */
     .stack1_dummy (NOLOAD):
     {
         *(.stack1*)
@@ -265,7 +265,7 @@ SECTIONS
     .stack_dummy (NOLOAD):
     {
         KEEP(*(.stack*))
-    } > SCRATCH_Y
+    } > RAM
 
     .flash_end : {
         KEEP(*(.embedded_end_block*))
@@ -273,9 +273,9 @@ SECTIONS
     } > FLASH =0xaa
 
     /* stack limit is poorly named, but historically is maximum heap ptr */
-    __StackLimit = ORIGIN(RAM) + LENGTH(RAM);
+    __StackLimit = __StackBottom;
     __StackOneTop = ORIGIN(SCRATCH_X) + LENGTH(SCRATCH_X);
-    __StackTop = ORIGIN(SCRATCH_Y) + LENGTH(SCRATCH_Y);
+    __StackTop = ORIGIN(RAM) + LENGTH(RAM);
     __StackOneBottom = __StackOneTop - SIZEOF(.stack1_dummy);
     __StackBottom = __StackTop - SIZEOF(.stack_dummy);
     PROVIDE(__stack = __StackTop);
@@ -292,11 +292,11 @@ SECTIONS
     PROVIDE (__llvm_libc_heap_limit = __HeapLimit);
 
     /* Check if data + heap + stack exceeds RAM limit */
-    ASSERT(__StackLimit >= __HeapLimit, "region RAM overflowed")
+    ASSERT(__end__ <= __StackBottom, "core 0 stack overlaps data/heap")
+    ASSERT(__scratch_x_end__ <= __StackOneBottom, "core 1 stack overlaps scratch X code")
 
     ASSERT( __binary_info_header_end - __logical_binary_start <= 1024, "Binary info must be in first 1024 bytes of the binary")
     ASSERT( __embedded_block_end - __logical_binary_start <= 4096, "Embedded block must be in first 4096 bytes of the binary")
 
     /* todo assert on extra code */
 }
-

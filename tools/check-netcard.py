@@ -22,6 +22,7 @@ fixture = r'''
 #define NETCARD_TLS_VERIFY 0
 #define NETCARD_REALTIME 0
 #define NETCARD_WEB_CONTROL 0
+#define NETCARD_SSH 0
 #define MII_DEBUG_PRINTF(...) ((void)0)
 #define MI_DRIVER_REGISTER(x)
 #define CYW43_ITF_STA 0
@@ -56,15 +57,20 @@ static int cyw43_state;
 static void *netif_default;
 static uint32_t time_us_32(void) { return now; }
 static unsigned radio_inits, joins;
+static unsigned hotspot_starts;
+static bool hotspot_ok=true, hotspot_active;
+static enum wifi_mode config_mode=WIFI_MODE_STATION;
 static enum wifi_config_status config_status = WIFI_CONFIG_READY;
 enum wifi_config_status wifi_config_load(wifi_config *out) {
     memset(out,0,sizeof(*out));
-    if(config_status==WIFI_CONFIG_READY){strcpy(out->ssid,"fixture");strcpy(out->password,"fixture-password");}
+    if(config_status==WIFI_CONFIG_READY){strcpy(out->ssid,"fixture");strcpy(out->password,"fixture-password");out->mode=config_mode;}
     return config_status;
 }
 static int cyw43_arch_init(void) { radio_inits++; return 0; }
 static void cyw43_arch_poll(void) {}
 static void cyw43_arch_enable_sta_mode(void) {}
+static bool wifi_access_point_start(const wifi_config *config) {assert(config->mode==WIFI_MODE_HOTSPOT);hotspot_starts++;hotspot_active=hotspot_ok;return hotspot_active;}
+static bool wifi_access_point_active(void) {return hotspot_active;}
 static int cyw43_arch_wifi_connect_async(const char *a,const char *b,int c) { assert(!strcmp(a,"fixture")&&!strcmp(b,"fixture-password")); joins++; return 0; }
 static int cyw43_tcpip_link_status(void *p,int n) { return CYW43_LINK_UP; }
 static int cyw43_wifi_get_rssi(void *p,int32_t *r) { *r=-40;return 0; }
@@ -182,6 +188,11 @@ int main(void) {
     for(const char *p=owned;*p;p++)write_reg(14,*p);
     count=opened;write_reg(6,1);assert(read_reg(10)==NH_REQUEST&&opened==count);
     assert(closed+aborted==opened);
+    config_mode=WIFI_MODE_HOTSPOT;unsigned previous_joins=joins;
+    netcard_init();assert(hotspot_starts==1&&s_nc.link&&joins==previous_joins);
+    now+=NC_LINK_JOIN_TIMEOUT_US;netcard_poll();assert(!netcard_wifi_status()&&joins==previous_joins);
+    hotspot_ok=false;netcard_init();assert(hotspot_starts==2&&!s_nc.link&&joins==previous_joins);
+    assert(strstr(netcard_wifi_status(),"hotspot"));netcard_poll();assert(joins==previous_joins);
     puts("PASS: register protocol, request lifecycle, raw bytes, legacy compatibility, credentials, cancellation, stale DNS, timeouts, redirects and teardown.");
 }
 '''

@@ -24,8 +24,9 @@ for board in (['pico','tufty'] if args.board=='all' else [args.board]):
  for usb in (['console','keyboard'] if args.usb=='all' else [args.usb]):
   kind='p2w' if board=='pico' else 'tufty'
   build=root/('build-public-'+kind+('-kbd' if usb=='keyboard' else ''))
-  options=['-DBOARD_VARIANT='+('P2W' if board=='pico' else 'TUFTY'),'-DPICO_BOARD='+('pico2_w' if board=='pico' else 'pimoroni_tufty2350'),'-DVIDEO_TYPE='+('SPI' if board=='pico' else 'PAR'),'-DCPU_SPEED=252','-DAUDIO_TYPE=PWM','-DPS2_KEYBOARD_ENABLED=OFF','-DUSB_HID_ENABLED='+('ON' if usb=='keyboard' else 'OFF'),'-DNETCARD_ENABLED=ON','-DNETCARD_TLS=ON','-DNETCARD_TLS_VERIFY=ON','-DNETCARD_WEB_CONTROL=ON','-DDEBUG_LOGS_ENABLED=ON','-DBOARD_MEMORY_DIAGNOSTICS=OFF','-DCMAKE_BUILD_TYPE=Release']
+  options=['-DBOARD_VARIANT='+('P2W' if board=='pico' else 'TUFTY'),'-DPICO_BOARD='+('pico2_w' if board=='pico' else 'pimoroni_tufty2350'),'-DVIDEO_TYPE='+('SPI' if board=='pico' else 'PAR'),'-DCPU_SPEED=252','-DAUDIO_TYPE=PWM','-DPS2_KEYBOARD_ENABLED=OFF','-DUSB_HID_ENABLED='+('ON' if usb=='keyboard' else 'OFF'),'-DNETCARD_ENABLED=ON','-DNETCARD_TLS=ON','-DNETCARD_TLS_VERIFY=ON','-DNETCARD_WEB_CONTROL=ON','-DNETCARD_SSH=ON','-DDEBUG_LOGS_ENABLED=ON','-DBOARD_MEMORY_DIAGNOSTICS=OFF','-DCMAKE_BUILD_TYPE=Release']
   if board=='tufty':options+=['-DPSRAM_SPEED=84']
   subprocess.run(['cmake','-S',str(root),'-B',str(build),'-G','Ninja',*options],check=True,env=env)
   subprocess.run(['ninja','-C',str(build),'-j',str(args.jobs)],check=True,env=env)
   subprocess.run([sys.executable,str(root/'tools/check-driver-build.py'),str(build)],check=True,env=env)
+  subprocess.run([sys.executable,str(root/'tools/check-ssh-build.py'),str(build)],check=True,env=env)

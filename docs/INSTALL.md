@@ -3,7 +3,10 @@
 These instructions describe local testing. Read [distribution status](DISTRIBUTION.md)
 before sharing built firmware or preflashed devices.
 
-Build the correct `.uf2` using [BUILDING.md](BUILDING.md). Firmware files are
+Download the correct firmware-only `.uf2` from
+[Releases](https://github.com/meech-ward/frank-apple/releases), or build it using
+[BUILDING.md](BUILDING.md). Check the release's hardware-validation status before
+installing a prerelease. Firmware files are
 board-specific: a Tufty image is not suitable for the Pico Display Pack build.
 These are firmware-only updates, not complete images of your saved disks.
 
@@ -71,9 +74,10 @@ wanted. Copy `apple-data.uf2` onto the badge's bootloader drive, entering
 HOME + RESET again if the firmware upload already restarted it.
 
 **Replacing this data image replaces existing saved programs.** Back up first.
-For an existing badge, prefer a firmware-only update. The browser library adds disks without replacing the volume. There is no USB
-file manager; changing internal Wi-Fi settings still requires updating the
-data volume.
+For an existing badge, prefer a firmware-only update. The browser library adds
+disks without replacing the volume. To change Wi-Fi or SSH settings, use the
+[config updater](WIFI-SETUP.md#tufty-2350-badge), which preserves other files.
+There is no USB file manager.
 
 ## BASIC examples and browser guide
 

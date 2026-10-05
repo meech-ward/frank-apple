@@ -21,6 +21,9 @@
 #if NETCARD_WEB_CONTROL
 #include "web_control.h"
 #endif
+#if NETCARD_SSH
+#include "ssh_control.h"
+#endif
 
 mutex_t video_mutex;
 
@@ -47,11 +50,23 @@ static int program_count;
 static dos_program_t programs[DOS_PROGRAM_MAX];
 static bool basic_ready;
 static const char *home_message;
+enum {
+    HOME_RESUME, HOME_SAVED, HOME_RUN, HOME_STOP, HOME_DISKS,
+#if NETCARD_WEB_CONTROL
+    HOME_WEB,
+#endif
+#if NETCARD_SSH
+    HOME_SSH,
+#endif
+};
 static const char *home_items[] = {
     "Resume Apple II", "Saved programs", "Run program in memory",
     "Stop program (Ctrl-C)", "Choose a disk"
 #if NETCARD_WEB_CONTROL
     , "Web control"
+#endif
+#if NETCARD_SSH
+    , "SSH"
 #endif
 };
 #define HOME_ITEMS ((int)(sizeof(home_items) / sizeof(home_items[0])))
@@ -59,7 +74,10 @@ static const char *home_items[] = {
 
 static const char *home_label(int item) {
 #if NETCARD_WEB_CONTROL
-    if (item == 5) return web_control_enabled() ? "Web control: ON" : "Web control: OFF";
+    if (item == HOME_WEB) return web_control_enabled() ? "Web control: ON" : "Web control: OFF";
+#endif
+#if NETCARD_SSH
+    if (item == HOME_SSH) return ssh_control_label();
 #endif
     return home_items[item];
 }
@@ -453,6 +471,10 @@ size_t disk_ui_describe(char *out, size_t cap) {
         char address[48]; web_control_address(address, sizeof(address));
         MENU_TEXT("\n%s\nSPACE also toggles web control.\n", address);
 #endif
+#if NETCARD_SSH
+        char ssh_address[64]; ssh_control_address(ssh_address, sizeof(ssh_address));
+        MENU_TEXT("%s\n", ssh_address);
+#endif
     } else if (ui_state == DISK_UI_PROGRAMS) {
         MENU_TEXT("SAVED PROGRAMS - DRIVE 1\n%.39s\n\n", g_loaded_disks[0].filename);
         if (program_count < 0) MENU_TEXT("Use a DOS 3.3 disk in drive 1.\nThis catalog could not be read.\n");
@@ -688,19 +710,22 @@ static bool handle_launcher_key(uint8_t key) {
 #endif
         if (key == '\r') {
             switch (home_item) {
-                case 0: disk_ui_hide(); break;
-                case 1: refresh_programs(); break;
-                case 2:
+                case HOME_RESUME: disk_ui_hide(); break;
+                case HOME_SAVED: refresh_programs(); break;
+                case HOME_RUN:
                     if (basic_ready) launch_command("RUN\r");
                     else home_message = "Run needs an empty ] BASIC prompt.";
                     break;
-                case 3:
+                case HOME_STOP:
                     disk_ui_hide();
                     if (!disk_ui_is_visible()) { clear_held_key(); remote_control_key(3); }
                     break;
-                case 4: ui_state = DISK_UI_SELECT_DRIVE; break;
+                case HOME_DISKS: ui_state = DISK_UI_SELECT_DRIVE; break;
 #if NETCARD_WEB_CONTROL
-                case 5: web_control_toggle(); break;
+                case HOME_WEB: web_control_toggle(); break;
+#endif
+#if NETCARD_SSH
+                case HOME_SSH: ssh_control_toggle(); break;
 #endif
             }
         }
@@ -1091,6 +1116,11 @@ void disk_ui_render(uint8_t *framebuffer, int width, int height) {
         y += 20;
         char address[48]; web_control_address(address, sizeof(address));
         draw_string_truncated(framebuffer, width, content_x, y, address, max_chars, COLOR_TEXT);
+#endif
+#if NETCARD_SSH
+        y += 12;
+        char ssh_address[64]; ssh_control_address(ssh_address, sizeof(ssh_address));
+        draw_string_truncated(framebuffer, width, content_x, y, ssh_address, max_chars, COLOR_TEXT);
 #endif
         draw_string(framebuffer, width, content_x, UI_Y + UI_HEIGHT - 16,
             "HOME / A / Esc: resume Apple II", COLOR_TEXT);

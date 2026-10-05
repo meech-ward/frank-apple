@@ -19,6 +19,9 @@ bool typing_try_apple(uint8_t key);
 size_t typing_pending(void);
 /* Named remote key / menu actions, called outside lwIP callbacks on core 0. */
 void remote_control_key(uint8_t key);
+/* Backpressure for continuous terminal input. Interrupt/menu actions always
+ * take priority; ordinary keys wait when the shared keyboard FIFO is full. */
+bool remote_control_try_key(uint8_t key);
 size_t remote_control_screen(char *out, char *inverse, size_t cap);
 bool remote_control_graphics(void);
 bool remote_control_basic_prompt(void);

@@ -332,6 +332,13 @@ void remote_control_key(uint8_t key) {
     }
 }
 
+bool remote_control_try_key(uint8_t key) {
+    if (key != 3 && key != 0x1D && !disk_ui_is_visible() && typing_len >= TYPING_SIZE)
+        return false;
+    remote_control_key(key);
+    return true;
+}
+
 bool remote_control_graphics(void) {
     return !SWW_GETSTATE(g_mii.sw_state, SWTEXT);
 }

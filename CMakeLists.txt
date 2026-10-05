@@ -99,8 +99,12 @@ option(NETCARD_ENABLED "Virtual WiFi network card in slot 1" OFF)
 option(NETCARD_TLS "HTTPS for the network card" OFF)
 option(NETCARD_TLS_VERIFY "Verify server TLS certificates with bundled CA roots" ON)
 option(NETCARD_WEB_CONTROL "Local browser keyboard and text screen (session opt-in)" OFF)
+option(NETCARD_SSH "Single-user SSH keyboard and text screen (wifi.ini opt-in)" OFF)
 if(NETCARD_WEB_CONTROL AND NOT NETCARD_ENABLED)
     message(FATAL_ERROR "NETCARD_WEB_CONTROL requires NETCARD_ENABLED")
+endif()
+if(NETCARD_SSH AND NOT NETCARD_ENABLED)
+    message(FATAL_ERROR "NETCARD_SSH requires NETCARD_ENABLED")
 endif()
 
 message(STATUS "FRANK Apple - Apple IIe Emulator for RP2350")
@@ -443,7 +447,17 @@ else()
 endif()
 
 if(NETCARD_ENABLED)
-    target_sources(${BUILD_NAME} PRIVATE src/mii_netcard.c src/net_http.c src/wifi_config.c src/wifi_config_file.c)
+    target_sources(${BUILD_NAME} PRIVATE src/mii_netcard.c src/net_http.c src/wifi_config.c src/wifi_config_file.c
+        src/wifi_access_point.c src/wifi_dhcp.c)
+    if(NETCARD_SSH)
+        target_sources(${BUILD_NAME} PRIVATE src/ssh_control.c src/ssh_identity.c src/ssh_terminal.c
+            src/ssh_transport.cpp src/ssh_transport_lwip.c
+            third_party/ssh/staticnet/crypt/CryptoEngine.cpp
+            third_party/ssh/staticnet/contrib/tweetnacl_25519.cpp
+            third_party/ssh/staticnet/contrib/base64.cpp)
+        target_compile_definitions(${BUILD_NAME} PRIVATE NETCARD_SSH=1 PICO_STACK_SIZE=12288 PICO_CORE1_STACK_SIZE=2048)
+        target_link_libraries(${BUILD_NAME} pico_mbedtls pico_rand)
+    endif()
     if(NETCARD_WEB_CONTROL)
         set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/src/web_control.html")
         file(READ "${CMAKE_CURRENT_LIST_DIR}/src/web_control.html" _web_hex HEX)

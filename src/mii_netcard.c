@@ -16,6 +16,10 @@
 #include "web_control.h"
 #endif
 #include "wifi_config.h"
+#include "wifi_access_point.h"
+#if NETCARD_SSH
+#include "ssh_control.h"
+#endif
 #include "pico/cyw43_arch.h"
 #include "pico/time.h"
 #include "lwip/altcp.h"
@@ -221,6 +225,10 @@ void netcard_cancel(void) {
 static void
 nc_link_poll(uint32_t now)
 {
+    if (s_wifi.mode == WIFI_MODE_HOTSPOT) {
+        s_nc.link = wifi_access_point_active() ? 1 : 0;
+        return; /* CYW43's STA link status does not describe its AP interface. */
+    }
     int st;
     if ((uint32_t)(now - s_link_check_last) < NC_LINK_CHECK_US)
         return;
@@ -281,11 +289,19 @@ netcard_init(void)
     }
     MII_DEBUG_PRINTF("netcard: radio initialized\n");
     s_nc.init_ok = true;
-    cyw43_arch_enable_sta_mode();
-    /* Async join: the emulator starts at once, no 15 s block. */
-    r = cyw43_arch_wifi_connect_async(s_wifi.ssid, s_wifi.password,
-            s_wifi.password[0] ? CYW43_AUTH_WPA2_AES_PSK : CYW43_AUTH_OPEN);
-    MII_DEBUG_PRINTF("netcard: join requested rc=%d\n", r);
+    if (s_wifi.mode == WIFI_MODE_HOTSPOT) {
+        s_nc.link = wifi_access_point_start(&s_wifi) ? 1 : 0;
+        MII_DEBUG_PRINTF("netcard: hotspot %s at 192.168.4.1\n", s_nc.link ? "ready" : "failed");
+    } else {
+        cyw43_arch_enable_sta_mode();
+        /* Async join: the emulator starts at once, no 15 s block. */
+        r = cyw43_arch_wifi_connect_async(s_wifi.ssid, s_wifi.password,
+                s_wifi.password[0] ? CYW43_AUTH_WPA2_AES_PSK : CYW43_AUTH_OPEN);
+        MII_DEBUG_PRINTF("netcard: join requested rc=%d\n", r);
+    }
+#if NETCARD_SSH
+    ssh_control_init(&s_wifi);
+#endif
 }
 
 const char *netcard_wifi_status(void) {
@@ -293,6 +309,7 @@ const char *netcard_wifi_status(void) {
     if (s_wifi_status == WIFI_CONFIG_INVALID) return "WiFi off: invalid /wifi.ini";
     if (s_wifi_status == WIFI_CONFIG_IO) return "WiFi off: cannot read /wifi.ini";
     if (!s_nc.init_ok) return "WiFi radio unavailable";
+    if (s_wifi.mode == WIFI_MODE_HOTSPOT && !s_nc.link) return "WiFi hotspot could not start";
     if (s_nc.link) return NULL;
     if (s_link_status == CYW43_LINK_BADAUTH) return "WiFi password rejected; retrying";
     if (s_link_status == CYW43_LINK_NONET) return "WiFi network not found; retrying";
@@ -320,6 +337,9 @@ netcard_poll(void)
     }
 #if NETCARD_WEB_CONTROL
     web_control_poll();
+#endif
+#if NETCARD_SSH
+    ssh_control_poll(s_nc.link != 0);
 #endif
 }
 

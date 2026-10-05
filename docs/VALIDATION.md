@@ -1,5 +1,58 @@
 # Validation and current limits
 
+## SSH and portable hotspot — 5 October 2026
+
+The new SSH/hotspot firmware builds for all four Tufty/Pico keyboard/console
+profiles. It has **not yet been exercised on a physical board**. There was no
+connected badge available for this change; the earlier hardware results below
+do not establish that the new radio mode or SSH timing works on hardware.
+
+Software validation includes:
+
+- The actual embedded SSH engine and the SDK's mbedTLS sources, compiled on the
+  host under ASan/UBSan, communicating with stock OpenSSH using its normal
+  cryptographic defaults. Password login, PTY/shell, keyboard bytes, a 64 KiB
+  paste with a deliberately slow consumer, a rejected second connection,
+  reconnects, wrong passwords, EOF draining, and corrupted encrypted data are
+  checked. Rekey requests disconnect cleanly with a reconnect message.
+- Malformed framing/parser tests, bounded channel windows, interrupt priority,
+  and authentication-state checks. These are regression tests, not a claim of
+  an independent cryptographic security audit.
+- The production raw TCP adapter with the SDK's real pbuf allocation/free code:
+  chained packets, receive backpressure, oversized input, connection errors,
+  close failures, and reconnect ordering. Sanitizers check buffer ownership.
+- ANSI screen tests that apply the output to a terminal model and compare cells:
+  inverse text, 40/80-column changes, small windows, fragmented key sequences,
+  input/output backpressure, and reconnects. The adapter leaves the host in its
+  ordinary terminal buffer with a visible cursor.
+- Real control-layer tests for configuration, storage failure, manual on/off,
+  connection isolation, pasted input, Ctrl-C, EOF, and bounded cleanup.
+- Host-key creation, durable readback, corruption detection, and recovery from
+  an interrupted first write. Existing invalid identities are not regenerated.
+- Station/hotspot configuration, DHCP lease and malformed-packet tests, and
+  SDK/lwIP adapter tests for AP-only packet routing and failure cleanup.
+- The config updater edits an image through real FatFs and verifies every
+  unrelated file, including saved disks and the host key. Its USB orchestration
+  is tested with a fake picotool, including interrupted writes and retained
+  backups; physical USB updating is still pending.
+- The existing disk, emulator, browser-guide, USB-input, power, launcher, HTTP,
+  and package checks still pass. The launcher renderer was inspected with its
+  SSH row and connection command.
+
+The linker reserves a 12 KiB core-0 stack in main SRAM, separate from core 1's
+2 KiB video stack. ARM compiler stack-usage reports put the conservative SSH
+signing call chain around 5.1 KiB before its small callers/interrupt overhead.
+All four builds retain more than 90 KiB of static heap headroom. This is not a
+measurement of live heap/stack peaks during simultaneous HTTPS and SSH.
+
+Physical acceptance still needed: connect from macOS/Linux on both an existing
+Wi-Fi network and the badge hotspot; type/paste, stop with Ctrl-C, save/reload,
+disconnect/reconnect, run browser/HTTPS alongside SSH, and verify USB keyboard
+and RESET power behavior remain normal. The firmware-only update preserves
+the existing data volume. See [SSH usage](SSH.md) and [Wi-Fi setup](WIFI-SETUP.md).
+
+## Previous hardware and software checks
+
 **Tufty power-off addition:** all four firmware profiles build, and the
 production-driver host tests pass for short/long RESET, boot reasons, LED
 feedback, timer wrap, peripheral parking and power-transition failures.
@@ -82,8 +135,8 @@ TLS 1.2 and a limited bundled root store. Certificate chain and hostname checks
 are enabled, but there is no trusted wall clock for certificate date checks.
 IPv6, compression, automatic login/token refresh and a JSON parser are not included.
 
-The browser mirrors text, not the full graphics display. Network control is an
-explicit per-session feature intended for a trusted local network. Pico display
+The browser mirrors text, not the full graphics display. Browser control is an
+explicit per-session feature; SSH startup is controlled by `wifi.ini`. Pico display
 buttons remain unmapped. Full badge data-image replacement erases its saved disks.
 
 The importer supports 140 KB .dsk/.do/.po, 232960-byte .nib, and the emulator's

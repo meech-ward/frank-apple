@@ -39,6 +39,13 @@ redistribution with Raspberry Pi semiconductor devices. Retain that license and
 its notices; it does not give permission for arbitrary non-Raspberry-Pi hardware.
 Mbed TLS is used under its Apache-2.0 option.
 
+The SSH feature adds a pinned BSD-3-Clause staticnet subset, public-domain
+TweetNaCl/libb64 code, and original MIT adapters. It reuses the existing
+Apache-2.0 mbedTLS backend and does not introduce wolfSSH or pico-sshd. Retain
+the [SSH provenance](../third_party/ssh/README.md),
+[staticnet notice](../licenses/staticnet-BSD-3-Clause.txt), and
+[Mbed TLS license text](../licenses/MbedTLS-LICENSE.txt) with its distributions.
+
 Removing the identified GPL driver implementations from the four supported
 profiles removes that specific GPL/CYW43 linking issue. It does not relicense
 the retained legacy source or resolve the separate embedded-ROM questions below.

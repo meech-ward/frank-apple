@@ -20,6 +20,12 @@ jobs:
           python3 tools/check-net-http.py
           python3 tools/check-netcard.py
           python3 tools/check-wifi-config.py
+          python3 tools/check-wifi-dhcp.py
+          python3 tools/check-wifi-access-point.py
+          python3 tools/check-configure-wifi.py
+          python3 tools/check-ssh-terminal.py
+          python3 tools/check-ssh-control.py
+          python3 tools/check-ssh-identity.py
           python3 tools/check-video-mixed.py
           python3 tools/check-cpu-bus.py
           node tools/check-guide.mjs
@@ -30,6 +36,20 @@ jobs:
           python3 tools/check-tufty-power.py
           python3 tools/check-dos-catalog.py
           python3 tools/check-launcher.py
+
+  ssh-interoperability:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Fetch the pinned SDK cryptography and TCP buffer sources
+        run: |
+          git clone --branch 2.2.0 --depth 1 https://github.com/raspberrypi/pico-sdk.git "$RUNNER_TEMP/pico-sdk"
+          test "$(git -C "$RUNNER_TEMP/pico-sdk" rev-parse HEAD)" = a1438dff1d38bd9c65dbd693f0e5db4b9ae91779
+          git -C "$RUNNER_TEMP/pico-sdk" submodule update --init --depth 1 lib/mbedtls lib/lwip
+      - name: Test the embedded engine with stock OpenSSH and sanitizers
+        run: python3 tests/test_ssh_transport.py --sdk "$RUNNER_TEMP/pico-sdk"
 
   firmware:
     runs-on: ubuntu-24.04

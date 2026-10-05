@@ -82,6 +82,8 @@ def package(board,firmware,out,wifi=None):
     for name in ['LICENSE','LICENSE-DOWNSTREAM','THIRD-PARTY-NOTICES.md']:
         shutil.copy2(ROOT/name,out/name)
     shutil.copytree(ROOT/'licenses',out/'licenses')
+    # Keep SSH provenance and the original file-level notices with binaries.
+    shutil.copytree(ROOT/'third_party/ssh',out/'third_party/ssh')
     files={str(p.relative_to(out)):{'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in sorted(out.rglob('*')) if p.is_file()}
     (out/'manifest.json').write_text(json.dumps({'board':board,'application_disks':[], 'private_wifi':wifi is not None,'files':files,'validation':'UF2 byte readback; no hardware flashed. Empty data volume contains no Apple applications or DOS.'},indent=2)+'\n')
     print('Created disk-free package: '+str(out))
