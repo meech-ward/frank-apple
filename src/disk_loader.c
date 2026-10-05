@@ -31,8 +31,8 @@ disk_entry_t* g_disk_list = (disk_entry_t*)vram;//[MAX_DISK_IMAGES];
 
 #if PICO_RP2350
 // drive0_cache lives in PSRAM to save 228KB of SRAM.
-// PSRAM layout: [drive0 BDSK | drive1 BDSK | HDD cache | ...]
-// HDD_CACHE_BASE in mii_dd_stub.c starts at EXTERNAL_MEMORY_DATA + 2*BDSK_BYTES.
+// PSRAM layout: [drive0 BDSK | drive1 BDSK | unused capacity].
+// SmartPort hard disks use FatFs directly; these caches are floppy-only.
 #if PSRAM_MAX_FREQ_MHZ
 uint8_t *drive0_cache = EXTERNAL_MEMORY_DATA;
 #else

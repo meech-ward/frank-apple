@@ -21,6 +21,10 @@ Software validation includes:
 - The production raw TCP adapter with the SDK's real pbuf allocation/free code:
   chained packets, receive backpressure, oversized input, connection errors,
   close failures, and reconnect ordering. Sanitizers check buffer ownership.
+  The review regression combines the actual SSH parser with that adapter: an
+  almost-complete maximum-size packet followed by its tail and the next packet
+  must keep advancing. Prefix consumption fixes the former whole-chain stall.
+  A connect/FIN before the first poll also releases the single session slot.
 - ANSI screen tests that apply the output to a terminal model and compare cells:
   inverse text, 40/80-column changes, small windows, fragmented key sequences,
   input/output backpressure, and reconnects. The adapter leaves the host in its
@@ -38,6 +42,10 @@ Software validation includes:
 - The existing disk, emulator, browser-guide, USB-input, power, launcher, HTTP,
   and package checks still pass. The launcher renderer was inspected with its
   SSH row and connection command.
+- SmartPort block-storage tests inject sync, seek, write, and short-write
+  failures into the production adapter and check two-drive round-trips.
+  A failed FatFs sync now returns an error to the emulated machine instead of
+  reporting a successful write. The floppy path already checked sync errors.
 
 The linker reserves a 12 KiB core-0 stack in main SRAM, separate from core 1's
 2 KiB video stack. ARM compiler stack-usage reports put the conservative SSH

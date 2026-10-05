@@ -3,7 +3,8 @@
  *
  * Simplified disk drive system for RP2350
  * The full mii_dd.c uses mmap/file I/O which isn't available on Pico.
- * We provide minimal stubs since we load disk images directly to PSRAM.
+ * SmartPort transfers blocks between emulated RAM and FatFs disk images.
+ * Floppy image loading and any PSRAM track caches live in disk_loader.c.
  *
  * Based on mii_dd.c Copyright (C) 2023 Michel Pollet
  * SPDX-License-Identifier: MIT
@@ -18,11 +19,6 @@
 #include "debug_log.h"
 #include "disk_loader.h"
 #include "board_config.h"
-#include "../drivers/board_memory.h"
-
-#if PICO_RP2350
-#define HDD_CACHE_BASE (EXTERNAL_MEMORY_DATA + 2 * BDSK_BYTES)
-#endif
 
 void
 mii_dd_system_init(
@@ -216,7 +212,8 @@ mii_dd_write(
 	        goto err;
     }
 
-	f_sync(f);
+    if (f_sync(f) != FR_OK)
+        goto err;
     return 0;
 err:
     return -1;

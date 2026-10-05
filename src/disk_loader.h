@@ -1,9 +1,9 @@
 /*
  * disk_loader.h
  * 
- * SD card disk image loader for FRANK Apple
- * Scans /apple directory on SD card and mounts disk images into the emulator
- * without staging the entire image in PSRAM.
+ * FatFs disk image loader for FRANK Apple.
+ * Scans /apple on SD or flash storage. Tufty caches mounted BDSK floppy
+ * images in PSRAM; boards without PSRAM stream tracks from storage.
  */
 
 #ifndef DISK_LOADER_H
@@ -77,8 +77,8 @@ extern disk_entry_t* g_disk_list;
 extern int g_disk_count;
 extern loaded_disk_t g_loaded_disks[2];  // Drive 1 and Drive 2
 
-// Initialize SD card and scan for disk images
-// Returns 0 on success, -1 on SD card error
+// Initialize the storage volume and scan for disk images
+// Returns 0 on success, -1 on storage error
 int disk_loader_init(void);
 
 // Scan /apple directory for disk images

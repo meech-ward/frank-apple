@@ -50,8 +50,11 @@ and tests it using the host's ordinary OpenSSH client, plus parser fuzzing under
 AddressSanitizer and UndefinedBehaviorSanitizer.
 The same command also exercises the actual lwIP adapter with SDK `pbuf` chain,
 reference-count, and free implementations. TCP PCB operations are test doubles;
-coverage includes transient buffer pressure, oversized-chain rejection, error
-ownership, reconnect ordering, and shutdown. This is separate from hardware testing.
+coverage includes transient buffer pressure, bounded prefix consumption of
+coalesced TCP chains, shared references, error ownership, reconnect ordering,
+and shutdown. An actual-engine regression covers an SSH packet tail sharing a
+TCP chain with the next packet, and a connection that closes before its first
+poll releases the session slot. This is separate from hardware testing.
 
 ARM GCC `-fstack-usage` places the active signing call chain at approximately
 5.1 KiB plus its small application/interrupt callers. SSH builds reserve a

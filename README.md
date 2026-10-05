@@ -32,11 +32,23 @@ It is an independent downstream, not an official FRANK release.
 ## Start here
 
 1. [Choose your hardware and USB mode](docs/HARDWARE.md).
-2. [Build the firmware](docs/BUILDING.md) and [install it](docs/INSTALL.md).
+2. [Download firmware](https://github.com/meech-ward/frank-apple/releases) and
+   [install it](docs/INSTALL.md). [Building from source](docs/BUILDING.md) is optional.
 3. Optionally copy [wifi.example.ini](wifi.example.ini) as `wifi.ini` and follow
    [Wi-Fi setup](docs/WIFI-SETUP.md).
 4. [Connect with SSH](docs/SSH.md), open the local Field Guide, or connect a USB keyboard. Try the
    [BASIC examples](basic/) and [HTTP examples](docs/HTTP-GET.md).
+
+## How it works
+
+- [Inside the badge](docs/HOW-IT-WORKS.md): FRANK Apple, the two CPU cores,
+  Apple RAM/ROM, PSRAM floppy caches, and what happens when you SAVE.
+- [Inside SSH](docs/SSH-INTERNALS.md): protocol and crypto, key storage,
+  input queues, and mirroring the shared Apple text screen.
+
+For practical steps: [Wi-Fi/hotspot setup](docs/WIFI-SETUP.md),
+[SSH and BASIC](docs/SSH.md), [badge buttons](docs/BUTTON-LAUNCHER.md),
+and [adding disks/applications](docs/DISKS.md).
 
 The repository contains source, documentation and our BASIC examples. Classic
 application disk images, personal disk saves, configured firmware, and local

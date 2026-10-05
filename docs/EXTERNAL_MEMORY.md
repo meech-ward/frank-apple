@@ -1,8 +1,12 @@
 # External memory
 
+For the overview, start with [How it works](HOW-IT-WORKS.md#where-everything-lives-on-tufty).
+This document covers the low-level memory driver.
+
 `drivers/board_memory.h` provides startup initialization, detected capacity, and
-the CS1 memory window at `0x11000000`. Existing disk buffers and the HDD cache
-use that window directly. There is no external-memory allocator.
+the CS1 memory window at `0x11000000`. The two floppy caches use that window
+directly. SmartPort uses FatFs without a PSRAM cache. There is no
+external-memory allocator.
 
 Initialization must run after setting the system clock and before launching
 core 1 or DMA that accesses flash/PSRAM. Interrupts are disabled during bus

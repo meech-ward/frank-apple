@@ -58,6 +58,7 @@ python3 tools/check-configure-wifi.py
 python3 tools/check-ssh-terminal.py
 python3 tools/check-ssh-control.py
 python3 tools/check-ssh-identity.py
+python3 tools/check-smartport-storage.py
 python3 tests/test_ssh_transport.py --sdk "$PICO_SDK_PATH"
 python3 tools/check-video-mixed.py
 python3 tools/check-cpu-bus.py

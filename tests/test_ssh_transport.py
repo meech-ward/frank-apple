@@ -46,15 +46,29 @@ def build(sdk, directory):
         run(["clang++", "-std=c++17", *flags, "-I" + str(ROOT / "src"),
              *[str(ROOT / p) for p in sources], *common, *objects,
              "-o", str(directory / target)])
+    return flags, common, objects
 
 
-def build_adapter(sdk, directory):
+def build_adapter(sdk, directory, crypto=None):
     lwip = sdk / "lib/lwip/src"
-    run(["clang", "-std=c11", "-O1", "-g", "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
-         "-I" + str(ROOT / "tests/ssh_adapter_stubs"), "-I" + str(ROOT / "src"),
-         "-I" + str(lwip / "include"), str(ROOT / "tests/ssh_transport_lwip_test.c"),
-         *[str(lwip / "core" / (name + ".c")) for name in ("pbuf", "mem", "memp", "def")],
+    flags = ["-std=c11", "-O1", "-g", "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
+             "-I" + str(ROOT / "tests/ssh_adapter_stubs"), "-I" + str(ROOT / "src"),
+             "-I" + str(lwip / "include")]
+    objects = []
+    for name in ("pbuf", "mem", "memp", "def"):
+        output = directory / ("lwip-" + name + ".o")
+        run(["clang", *flags, "-c", str(lwip / "core" / (name + ".c")), "-o", str(output)])
+        objects.append(str(output))
+    source = str(ROOT / "tests/ssh_transport_lwip_test.c")
+    run(["clang", *flags, source, *objects,
          "-o", str(directory / "ssh-adapter")])
+    if crypto:
+        engine_flags, engine_common, engine_objects = crypto
+        adapter = directory / "ssh-adapter-engine.o"
+        run(["clang", *flags, "-DSSH_ADAPTER_REAL_ENGINE", "-c", source, "-o", str(adapter)])
+        run(["clang++", "-std=c++17", *engine_flags, "-I" + str(ROOT / "src"),
+             str(ROOT / "src/ssh_transport.cpp"), *engine_common, *engine_objects,
+             str(adapter), *objects, "-o", str(directory / "ssh-adapter-engine")])
 
 
 class Client:
@@ -162,14 +176,14 @@ def main():
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="apple2-ssh-test-") as temporary:
         directory = Path(temporary)
-        if not args.adapter_only:
-            build(args.sdk.resolve(), directory)
-        build_adapter(args.sdk.resolve(), directory)
+        crypto = None if args.adapter_only else build(args.sdk.resolve(), directory)
+        build_adapter(args.sdk.resolve(), directory, crypto)
         env = dict(os.environ, UBSAN_OPTIONS="halt_on_error=1",
                    ASAN_OPTIONS="detect_leaks=0" if sys.platform == "darwin" else "detect_leaks=1")
         run([str(directory / "ssh-adapter")], env=env, timeout=30)
         if args.adapter_only:
             return
+        run([str(directory / "ssh-adapter-engine")], env=env, timeout=30)
         run([str(directory / "ssh-fuzz")], env=env, timeout=60)
         askpass = directory / "askpass"
         askpass.write_text('#!/bin/sh\nprintf %s "$APPLE2_TEST_PASSWORD"\n')

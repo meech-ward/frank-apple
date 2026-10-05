@@ -26,6 +26,7 @@ jobs:
           python3 tools/check-ssh-terminal.py
           python3 tools/check-ssh-control.py
           python3 tools/check-ssh-identity.py
+          python3 tools/check-smartport-storage.py
           python3 tools/check-video-mixed.py
           python3 tools/check-cpu-bus.py
           node tools/check-guide.mjs
