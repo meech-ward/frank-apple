@@ -19,6 +19,9 @@ Local changes to these files:
 - Encode SSH `mpint` shared secrets canonically, including leading zero stripping.
 - Replace two left shifts of signed negative carries in TweetNaCl with equivalent
   multiplications, removing undefined C++ behavior found by UBSan.
+- Match `crypto_sign_open`'s declaration to its `u64` (`uint64_t`) definition.
+  The upstream `unsigned long long` declaration creates a different C++ symbol
+  on Linux LP64 platforms, where `uint64_t` is `unsigned long`.
 
 The TCP/IP stack, hardware drivers, SFTP, upstream circular FIFO, and unsafe
 variable-length packet accessor classes are **not included**. The adapter uses
