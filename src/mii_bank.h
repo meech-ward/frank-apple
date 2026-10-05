@@ -150,15 +150,15 @@ void pin_ram_pages_for(
 
 inline static
 uint8_t ram_page_read(vram_t* v, const uint32_t addr32) {
-    const register uint8_t ram_page = get_ram_page_for(v, addr32);
-    const register uint32_t addr_in_page = addr32 & RAM_IN_PAGE_ADDR_MASK;
+    register const uint8_t ram_page = get_ram_page_for(v, addr32);
+    register const uint32_t addr_in_page = addr32 & RAM_IN_PAGE_ADDR_MASK;
     return v->raw[(ram_page * RAM_PAGE_SIZE) + addr_in_page];
 }
 
 inline static
 void ram_page_write(vram_t* v, const uint32_t addr32, const uint8_t val) {
-    const register uint8_t ram_page = get_ram_page_for(v, addr32);
-    const register uint32_t addr_in_page = addr32 & RAM_IN_PAGE_ADDR_MASK;
+    register const uint8_t ram_page = get_ram_page_for(v, addr32);
+    register const uint32_t addr_in_page = addr32 & RAM_IN_PAGE_ADDR_MASK;
     v->raw[(ram_page * RAM_PAGE_SIZE) + addr_in_page] = val;
 	v->s_desc[ram_page].dirty = 1;
 }
