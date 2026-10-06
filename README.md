@@ -69,10 +69,12 @@ and personal configuration are not included.
 ## Current validation
 
 The hardware ports, disk saves, browser guide and keyboard were exercised on
-both boards during development. SSH has been tested against a real OpenSSH
-client on the host, with sanitizer tests for terminal input, protocol framing,
-flow control, authentication, and configuration. **SSH/hotspot operation on a
-physical badge still needs validation.** See [validation and limits](docs/VALIDATION.md).
+both boards during development. The Tufty keyboard build has also passed
+[physical SSH testing](docs/HARDWARE-VALIDATION-2026-10-05.md): macOS OpenSSH,
+40/80-column text, paste, save/load, reconnects, and HTTP/HTTPS alongside SSH and
+browser polling. Host tests cover protocol framing, authentication, flow control,
+and configuration under sanitizers. **Hotspot operation and the USB configuration
+updater still need physical validation.** See [validation and limits](docs/VALIDATION.md).
 
 ## Upstream and licensing
 

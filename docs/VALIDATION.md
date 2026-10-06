@@ -2,10 +2,13 @@
 
 ## SSH and portable hotspot — 5 October 2026
 
-The new SSH/hotspot firmware builds for all four Tufty/Pico keyboard/console
-profiles. It has **not yet been exercised on a physical board**. There was no
-connected badge available for this change; the earlier hardware results below
-do not establish that the new radio mode or SSH timing works on hardware.
+The SSH/hotspot firmware builds for all four Tufty/Pico keyboard/console profiles.
+The Tufty keyboard build has now passed **physical station-mode SSH testing**
+with macOS OpenSSH, including typing/paste, 40/80-column text, save/load, reconnects,
+and outgoing HTTP/HTTPS alongside browser polling. See the
+[5 October hardware report](HARDWARE-VALIDATION-2026-10-05.md) for the tested
+firmware and exact scope. Hotspot and USB configuration updating remain untested
+on hardware; host results do not establish those paths.
 
 Software validation includes:
 
@@ -53,11 +56,12 @@ signing call chain around 5.1 KiB before its small callers/interrupt overhead.
 All four builds retain more than 90 KiB of static heap headroom. This is not a
 measurement of live heap/stack peaks during simultaneous HTTPS and SSH.
 
-Physical acceptance still needed: connect from macOS/Linux on both an existing
-Wi-Fi network and the badge hotspot; type/paste, stop with Ctrl-C, save/reload,
-disconnect/reconnect, run browser/HTTPS alongside SSH, and verify USB keyboard
-and RESET power behavior remain normal. The firmware-only update preserves
-the existing data volume. See [SSH usage](SSH.md) and [Wi-Fi setup](WIFI-SETUP.md).
+Physical acceptance still needed: hotspot mode and its DHCP service; the USB
+configuration updater; Linux-to-device and Pico 2 W SSH; USB keyboard and RESET
+power regressions on this revision. The October test rebooted the emulated Apple
+and remounted its disk; it did not power-cycle the RP2350 after saving. Firmware-only
+updates preserve the existing data volume. See [SSH usage](SSH.md) and
+[Wi-Fi setup](WIFI-SETUP.md).
 
 ## Previous hardware and software checks
 

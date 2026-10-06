@@ -86,7 +86,8 @@ list the exact upstream revision and component licenses.
 
 The firmware reserves a 12 KiB core-0 stack for crypto/HTTPS and a separate 2 KiB
 video stack. Link checks enforce those reservations and minimum heap headroom.
-Runtime peaks and radio timing still require a physical-board test.
+Runtime heap/stack peaks remain unmeasured. Station-mode SSH and concurrent HTTPS
+passed [physical tests](HARDWARE-VALIDATION-2026-10-05.md); hotspot timing is untested.
 
 ## Source and tests
 
