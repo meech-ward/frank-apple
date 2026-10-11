@@ -39,7 +39,10 @@ It is an independent downstream, not an official FRANK release.
 4. [Connect with SSH](docs/SSH.md), open the local Field Guide, or connect a USB keyboard. Try the
    [BASIC examples](basic/) and [HTTP examples](docs/HTTP-GET.md).
 
-## How it works
+## Documentation
+
+Browse the **[documentation index](docs/README.md)** for setup, everyday use,
+architecture, development, and test reports, with a short explanation of each guide.
 
 - [Inside the badge](docs/HOW-IT-WORKS.md): FRANK Apple, the two CPU cores,
   Apple RAM/ROM, PSRAM floppy caches, and what happens when you SAVE.
